@@ -20,7 +20,11 @@ npx shadcn@latest init
 # 4. Add components
 npx shadcn@latest add input card dialog badge dropdown-menu form label textarea
 
-# 5. Start dev server
+# 5. Set up environment variables
+cp ../.env.example .env.local
+# Set NEXT_PUBLIC_API_URL=http://localhost:8000/api
+
+# 6. Start dev server
 npm run dev
 # → http://localhost:3000
 ```
