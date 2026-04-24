@@ -2,3 +2,6 @@
 
 1. set up frontend 
 Run: npx create-next-app@latest frontend --typescript --tailwind --eslint --app. This sets up Next.js 14 with TypeScript, Tailwind CSS, ESLint, and the App Router all in one command. Verify the dev server runs with npm run dev and you see the default Next.js page on localhost:3000.
+- install nodejs locally on your system (brew install node)
+- export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" && npx create-next-app@latest frontend --typescript --tailwind --eslint --app --no-src-dir --import-alias "@/*"
+- 
