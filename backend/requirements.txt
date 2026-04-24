@@ -1,0 +1,17 @@
+# FastAPI core
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
+# Database
+sqlalchemy>=2.0.0
+aiosqlite>=0.20.0          # async SQLite driver (swap for asyncpg for PostgreSQL)
+
+# Pydantic & settings
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+pydantic[email]            # EmailStr support
+
+# Auth & security
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+python-multipart>=0.0.9    # required for OAuth2PasswordRequestForm
