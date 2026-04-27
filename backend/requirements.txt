@@ -4,7 +4,7 @@ uvicorn[standard]>=0.30.0
 
 # Database
 sqlalchemy>=2.0.0
-aiosqlite>=0.20.0          # async SQLite driver (swap for asyncpg for PostgreSQL)
+asyncpg>=0.29.0            # async PostgreSQL driver
 greenlet>=3.0.0            # required by SQLAlchemy async engine
 motor>=3.4.0               # async MongoDB driver
 

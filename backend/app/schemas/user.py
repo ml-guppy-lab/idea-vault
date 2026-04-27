@@ -1,16 +1,17 @@
 from pydantic import BaseModel, EmailStr
 
+from app.models.user import AuthProvider
+
 
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
-    full_name: str | None = None
 
 
 class UserRead(BaseModel):
     id: str
     email: EmailStr
-    full_name: str | None
+    auth_provider: AuthProvider
     is_active: bool
 
     model_config = {"from_attributes": True}

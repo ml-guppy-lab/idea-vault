@@ -21,7 +21,6 @@ async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)):
     user = User(
         email=payload.email,
         hashed_password=hash_password(payload.password),
-        full_name=payload.full_name,
     )
     db.add(user)
     await db.commit()

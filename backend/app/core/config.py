@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
 
-    # Database
-    DATABASE_URL: str = "sqlite+aiosqlite:///./idea_vault.db"
+    # Database (PostgreSQL)
+    DATABASE_URL: str = "postgresql+asyncpg://idea_user:idea_pass@localhost:5432/idea_vault_auth"
 
     # Security
     SECRET_KEY: str = "change-me-in-production"
