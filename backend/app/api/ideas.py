@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decode_access_token
-from app.db.database import get_db
+from app.db.postgres import get_db
 from app.models.idea import Idea
 from app.models.user import User
 from app.schemas.idea import IdeaCreate, IdeaResponse, IdeaUpdate

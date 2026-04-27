@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import auth, ideas
 from app.core.config import settings
-from app.db.database import init_db
+from app.db.postgres import init_db
 from app.db.mongodb import close_mongo_connection, connect_to_mongo
 
 
