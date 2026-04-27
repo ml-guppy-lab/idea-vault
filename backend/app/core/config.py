@@ -19,7 +19,8 @@ class Settings(BaseSettings):
     # Security
     SECRET_KEY: str = "change-me-in-production"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 1 day
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15        # short-lived JWT
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 180         # long-lived opaque token stored in DB
 
     # MongoDB
     MONGO_URI: str = "mongodb://idea_user:idea_pass@localhost:27017/idea_vault?authSource=admin"

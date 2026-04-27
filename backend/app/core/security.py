@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -20,6 +21,12 @@ def create_access_token(subject: str) -> str:
     )
     payload = {"sub": subject, "exp": expire}
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def create_refresh_token() -> str:
+    # Opaque cryptographically secure random string — NOT a JWT.
+    # Stored in the DB so it can be validated and revoked server-side.
+    return secrets.token_urlsafe(64)
 
 
 def decode_access_token(token: str) -> str | None:

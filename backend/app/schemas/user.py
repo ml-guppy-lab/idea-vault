@@ -25,6 +25,12 @@ class UserCreate(BaseModel):
         return v
 
 
+class UserLogin(BaseModel):
+    # Plain JSON body — no password strength check on login, just verify against hash
+    email: EmailStr
+    password: str
+
+
 class UserRead(BaseModel):
     # Only expose id and email — never return hashed_password or auth internals
     id: str
@@ -35,4 +41,5 @@ class UserRead(BaseModel):
 
 class Token(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"

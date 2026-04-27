@@ -1,14 +1,15 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.config import settings
+from app.core.security import create_access_token, create_refresh_token, hash_password, verify_password
 from app.db.postgres import get_db
+from app.models.refresh_token import RefreshToken
 from app.models.user import AuthProvider, User
-from app.schemas.user import Token, UserCreate, UserRead
+from app.schemas.user import Token, UserCreate, UserLogin, UserRead
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -44,16 +45,53 @@ async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token)
-async def login(
-    form: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(User).where(User.email == form.username))
+async def login(payload: UserLogin, db: AsyncSession = Depends(get_db)):
+    # Look up the user by email
+    result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
-    if not user or not verify_password(form.password, user.hashed_password):
+
+    # Use a single generic error for any authentication failure.
+    # Never reveal whether the email or the password was wrong — that leaks account existence.
+    invalid_credentials = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    # Reject if user not found or they signed up via OAuth (no stored password hash)
+    if not user or not user.hashed_password:
+        raise invalid_credentials
+
+    # Reject if bcrypt verification fails
+    if not verify_password(payload.password, user.hashed_password):
+        raise invalid_credentials
+
+    # Reject disabled accounts separately — different HTTP status, not 401
+    if not user.is_active:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is disabled",
         )
-    token = create_access_token(subject=user.id)
-    return Token(access_token=token)
+
+    # --- tokens ---
+
+    # Short-lived JWT — carries user identity, verified without a DB round-trip
+    access_token = create_access_token(subject=user.id)
+
+    # Long-lived opaque random string — stored in DB so it can be revoked server-side
+    raw_refresh = create_refresh_token()
+    refresh_expires = datetime.now(timezone.utc) + timedelta(
+        days=settings.REFRESH_TOKEN_EXPIRE_DAYS
+    )
+
+    # Persist the refresh token record
+    db.add(
+        RefreshToken(
+            user_id=user.id,
+            token=raw_refresh,
+            expires_at=refresh_expires,
+        )
+    )
+    await db.commit()
+
+    return Token(access_token=access_token, refresh_token=raw_refresh)

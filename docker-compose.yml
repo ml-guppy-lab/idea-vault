@@ -9,6 +9,12 @@ services:
       - "8000:8000"
     env_file:
       - ./backend/.env
+    environment:
+      # Override localhost URLs from .env with Docker service names.
+      # env_file is read first; environment block takes precedence.
+      DATABASE_URL: postgresql+asyncpg://idea_user:idea_pass@postgres:5432/idea_vault_auth
+      MONGO_URI: mongodb://idea_user:idea_pass@mongo:27017/idea_vault?authSource=admin
+      REDIS_URL: redis://redis:6379
     volumes:
       - ./backend:/app          # live-reload in development
     depends_on:
@@ -47,7 +53,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-idea_user}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-idea_user} -d ${POSTGRES_DB:-idea_vault_auth}"]
       interval: 10s
       timeout: 5s
       retries: 5

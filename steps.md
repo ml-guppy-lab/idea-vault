@@ -363,3 +363,123 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 On startup, `connect_to_redis()` runs `ping()` — if Redis isn't reachable, the server won't start. A clean startup with no errors means Redis is connected.
+
+---
+
+## Auth — POST /auth/register
+
+### What it does
+
+Accepts an email and password, validates both, creates a user in PostgreSQL, and returns the new user's `id` and `email`.
+
+### Files created / changed
+
+| File | What changed |
+|---|---|
+| `backend/app/schemas/user.py` | `UserCreate` — added `@field_validator("password")` for strength rules; `UserRead` — trimmed to only `id` + `email` |
+| `backend/app/api/auth.py` | `POST /register` — checks duplicate email (409), hashes password with bcrypt, persists user, returns `UserRead` |
+| `backend/app/core/security.py` | `hash_password()` — uses `bcrypt.hashpw` directly (passlib removed — incompatible with bcrypt ≥ 4.x on Python 3.12+) |
+| `backend/requirements.txt` | Replaced `passlib` with `bcrypt>=4.0.0` |
+
+### Password validation rules (enforced in Pydantic before the route runs)
+
+| Rule | Error message |
+|---|---|
+| Minimum 8 characters | `Password must be at least 8 characters` |
+| At least one uppercase letter | `Password must contain at least one uppercase letter` |
+| At least one number | `Password must contain at least one number` |
+
+Validation failures return `422 Unprocessable Entity` automatically — the route is never reached.
+
+### Security decisions
+
+- The plain-text password is **never stored** — only the bcrypt hash
+- `UserRead` intentionally omits `hashed_password`, `auth_provider`, and `is_active` — the client gets only `id` and `email`
+- Duplicate email → `409 Conflict` (not 422) — it's a business rule, not a validation error
+
+### How to verify
+
+```bash
+# Valid registration — returns 201
+curl -X POST http://localhost:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}'
+# → {"id": "...", "email": "you@example.com"}
+
+# Duplicate email — returns 409
+curl -X POST http://localhost:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}'
+# → {"detail": "Email already registered"}
+
+# Weak password — returns 422
+curl -X POST http://localhost:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "test@example.com", "password": "abc"}'
+# → {"detail": [{"msg": "Password must be at least 8 characters", ...}]}
+```
+
+Confirm the row in **TablePlus** → `idea_vault_auth` → `users` table. The `hashed_password` column should contain a `$2b$...` bcrypt hash, never the plain text.
+
+---
+
+## Auth — POST /auth/login
+
+### What it does
+
+Accepts an email and password as a JSON body. Looks up the user in PostgreSQL, verifies the password with bcrypt, and on success issues a short-lived JWT access token and a long-lived opaque refresh token. The refresh token is stored in the `refresh_tokens` table so it can be validated and revoked server-side.
+
+### Files created / changed
+
+| File | What changed |
+|---|---|
+| `backend/app/schemas/user.py` | Added `UserLogin` (email + password, no strength check); `Token` updated to include `refresh_token` field |
+| `backend/app/api/auth.py` | `POST /login` — full implementation (see below) |
+| `backend/app/core/security.py` | Added `create_refresh_token()` — `secrets.token_urlsafe(64)`, opaque, not a JWT |
+| `backend/app/core/config.py` | `ACCESS_TOKEN_EXPIRE_MINUTES` set to `15`; added `REFRESH_TOKEN_EXPIRE_DAYS = 180` |
+| `backend/.env` | `ACCESS_TOKEN_EXPIRE_MINUTES` updated to `15` |
+
+### Token design
+
+| Token | Type | Expiry | Where stored |
+|---|---|---|---|
+| `access_token` | Signed JWT (`HS256`) | 15 minutes | Client only (Authorization header) |
+| `refresh_token` | Opaque random string (`secrets.token_urlsafe(64)`) | 180 days | PostgreSQL `refresh_tokens` table |
+
+**Why two tokens?**
+- The JWT is stateless — the server can verify it without a DB call, so it's kept short-lived (15 min)
+- The refresh token is stored in the DB, so it can be revoked at any time (logout, compromised account, etc.)
+
+### Security decisions
+
+- Uses `UserLogin` (plain JSON body), not OAuth2 form — the frontend sends JSON, not form-encoded data
+- A **single generic `401 Invalid credentials`** is returned whether the email doesn't exist, the password is wrong, or the user has no stored password hash (OAuth user). This prevents account enumeration — the caller learns nothing about which field was wrong
+- Inactive users get `403 Forbidden` — distinct from an auth failure, and deliberate
+- The refresh token raw value (`secrets.token_urlsafe(64)`) is stored as-is. A future improvement is to hash it before storing (like a password) so a DB leak doesn't expose valid tokens
+
+### How to verify
+
+```bash
+# Successful login — returns 200
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}'
+# → {"access_token": "eyJ...", "refresh_token": "abc123...", "token_type": "bearer"}
+
+# Wrong password — returns 401 (same message as wrong email — by design)
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "wrongpassword"}'
+# → {"detail": "Invalid credentials"}
+
+# Non-existent email — returns 401 (same generic message — by design)
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "ghost@example.com", "password": "Secret123"}'
+# → {"detail": "Invalid credentials"}
+```
+
+After a successful login, confirm the refresh token row in **TablePlus** → `idea_vault_auth` → `refresh_tokens` table. You should see a row with `user_id` matching the user, a long random `token` string, and `expires_at` ~180 days from now.
+
+Decode the access token at [jwt.io](https://jwt.io) to confirm the `sub` (user id) and `exp` (expiry ~15 min from now) claims.
+
