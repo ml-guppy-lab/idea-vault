@@ -231,3 +231,85 @@ The original `schemas/idea.py` was a placeholder with basic fields. It was rewri
 The route file was importing `IdeaRead` (old name). After the schema rewrite renamed it to `IdeaResponse`, all imports and `response_model=` references in `api/ideas.py` were updated to match.
 
 > **Note:** The ideas routes still use SQLAlchemy as a placeholder. They will be fully rewritten to use `get_mongo_db()` when the ideas CRUD epic is implemented.
+
+---
+
+## PostgreSQL — Code Setup
+
+### Why PostgreSQL for auth?
+
+PostgreSQL stores structured, relational data — users and refresh tokens. MongoDB stores ideas (flexible, document-based). They don't overlap.
+
+### Files created / changed
+
+| File | What changed |
+|---|---|
+| `backend/app/db/postgres.py` | Renamed from `database.py` — SQLAlchemy async engine, `Base`, `get_db()`, `init_db()` |
+| `backend/app/models/user.py` | Rewritten — `auth_provider` enum (`local`/`google`), `hashed_password` nullable for OAuth users, removed `full_name` |
+| `backend/app/models/refresh_token.py` | New — `id`, `user_id` (FK → users, CASCADE delete), `token` (unique), `expires_at`, `created_at` |
+| `backend/app/schemas/user.py` | Updated — removed `full_name`, added `auth_provider` to `UserRead` |
+| `backend/app/api/auth.py` | Removed `full_name` from user creation |
+| `backend/app/core/config.py` | `DATABASE_URL` default now points to PostgreSQL `idea_vault_auth` |
+| `backend/.env` | `DATABASE_URL` updated to PostgreSQL, `POSTGRES_DB` set to `idea_vault_auth` |
+| `backend/requirements.txt` | Replaced `aiosqlite` with `asyncpg` (async PostgreSQL driver) |
+| `backend/app/main.py` | Imports both models before `init_db()` so SQLAlchemy registers them with `Base` |
+| `docker-compose.yml` | PostgreSQL default DB updated to `idea_vault_auth` |
+
+### How tables are created
+
+`init_db()` in `postgres.py` calls `Base.metadata.create_all` on startup. SQLAlchemy reads all models imported in `main.py` and creates the tables automatically if they don't exist. No manual SQL needed.
+
+### Tables created in `idea_vault_auth`
+
+**`users`**
+| Column | Type | Notes |
+|---|---|---|
+| `id` | VARCHAR(36) PK | UUID |
+| `email` | VARCHAR(255) | unique, indexed, not null |
+| `hashed_password` | VARCHAR | nullable (null for OAuth users) |
+| `auth_provider` | ENUM | `local` or `google` |
+| `is_active` | BOOLEAN | not null |
+| `created_at` | TIMESTAMP WITH TIME ZONE | not null |
+
+**`refresh_tokens`**
+| Column | Type | Notes |
+|---|---|---|
+| `id` | VARCHAR(36) PK | UUID |
+| `user_id` | VARCHAR(36) FK | → `users.id`, CASCADE delete |
+| `token` | VARCHAR(512) | unique, not null |
+| `expires_at` | TIMESTAMP WITH TIME ZONE | not null |
+| `created_at` | TIMESTAMP WITH TIME ZONE | not null |
+
+### Install asyncpg and start
+
+```bash
+cd backend && source venv/bin/activate
+pip install -r requirements.txt
+
+# Start PostgreSQL container
+docker-compose up -d postgres
+
+# Create the database (only needed once — Docker won't auto-create a renamed DB)
+docker-compose exec postgres psql -U idea_user -d postgres -c "CREATE DATABASE idea_vault_auth;"
+
+# Start backend — tables are auto-created on startup
+uvicorn app.main:app --reload --port 8000
+```
+
+---
+
+## PostgreSQL — TablePlus Connection
+
+1. Download **TablePlus** from [tableplus.com](https://tableplus.com) (free, macOS native)
+2. Open TablePlus → click **"+"** → select **PostgreSQL**
+3. Fill in:
+   - **Name:** `Idea Vault Auth`
+   - **Host:** `127.0.0.1`
+   - **Port:** `5432`
+   - **User:** `idea_user`
+   - **Password:** `idea_pass`
+   - **Database:** `idea_vault_auth`
+4. Click **Test** → should show green **"Connection is OK"**
+5. Click **Connect**
+
+You'll see `users`, `refresh_tokens`, and `ideas` tables in the sidebar.
