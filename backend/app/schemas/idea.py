@@ -1,30 +1,77 @@
-from datetime import datetime
+from pydantic import BaseModel, Field
+from typing import Optional
+from enum import Enum
+from datetime import datetime, timezone
 
-from pydantic import BaseModel
 
+# --- Enums ---
+
+class IdeaStatus(str, Enum):
+    raw = "raw"
+    exploring = "exploring"
+    validated = "validated"
+    building = "building"
+    shipped = "shipped"
+    abandoned = "abandoned"
+
+
+class IdeaPriority(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+
+
+# --- Request Schema (what the user sends when CREATING an idea) ---
 
 class IdeaCreate(BaseModel):
-    title: str
-    content: str | None = None
-    tags: str | None = None
-    is_pinned: bool = False
+    title: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    tags: Optional[list[str]] = Field(default=[])
+    status: Optional[IdeaStatus] = Field(default=IdeaStatus.raw)
+    priority: Optional[IdeaPriority] = Field(default=IdeaPriority.low)
 
+
+# --- Request Schema (what the user sends when UPDATING an idea) ---
+# All fields are Optional here — user can update just one field if they want
 
 class IdeaUpdate(BaseModel):
-    title: str | None = None
-    content: str | None = None
-    tags: str | None = None
-    is_pinned: bool | None = None
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    tags: Optional[list[str]] = Field(default=None)
+    status: Optional[IdeaStatus] = Field(default=None)
+    priority: Optional[IdeaPriority] = Field(default=None)
 
 
-class IdeaRead(BaseModel):
-    id: str
+# --- Response Schema (what your API sends BACK to the frontend) ---
+# This is the full idea as stored in MongoDB
+
+class IdeaResponse(BaseModel):
+    id: str = Field(alias="_id")
+    userId: str
     title: str
-    content: str | None
-    tags: str | None
-    is_pinned: bool
-    owner_id: str
-    created_at: datetime
-    updated_at: datetime
+    description: Optional[str] = None
+    tags: list[str] = []
+    status: IdeaStatus
+    priority: IdeaPriority
+    createdAt: datetime
+    updatedAt: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {"populate_by_name": True}
+
+
+# --- Internal Schema (the full document as saved in MongoDB) ---
+# This is what you build before inserting into the database
+
+class IdeaInDB(BaseModel):
+    userId: str
+    title: str
+    description: Optional[str] = None
+    tags: list[str] = []
+    status: IdeaStatus = IdeaStatus.raw
+    priority: IdeaPriority = IdeaPriority.low
+    createdAt: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    updatedAt: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )

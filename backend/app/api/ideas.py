@@ -7,7 +7,7 @@ from app.core.security import decode_access_token
 from app.db.database import get_db
 from app.models.idea import Idea
 from app.models.user import User
-from app.schemas.idea import IdeaCreate, IdeaRead, IdeaUpdate
+from app.schemas.idea import IdeaCreate, IdeaResponse, IdeaUpdate
 
 router = APIRouter(prefix="/ideas", tags=["ideas"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -28,7 +28,7 @@ async def get_current_user(
     return user
 
 
-@router.get("/", response_model=list[IdeaRead])
+@router.get("/", response_model=list[IdeaResponse])
 async def list_ideas(
     current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
@@ -36,7 +36,7 @@ async def list_ideas(
     return result.scalars().all()
 
 
-@router.post("/", response_model=IdeaRead, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=IdeaResponse, status_code=status.HTTP_201_CREATED)
 async def create_idea(
     payload: IdeaCreate,
     current_user: User = Depends(get_current_user),
@@ -49,7 +49,7 @@ async def create_idea(
     return idea
 
 
-@router.get("/{idea_id}", response_model=IdeaRead)
+@router.get("/{idea_id}", response_model=IdeaResponse)
 async def get_idea(
     idea_id: str,
     current_user: User = Depends(get_current_user),
@@ -64,7 +64,7 @@ async def get_idea(
     return idea
 
 
-@router.patch("/{idea_id}", response_model=IdeaRead)
+@router.patch("/{idea_id}", response_model=IdeaResponse)
 async def update_idea(
     idea_id: str,
     payload: IdeaUpdate,

@@ -6,12 +6,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import auth, ideas
 from app.core.config import settings
 from app.db.database import init_db
+from app.db.mongodb import close_mongo_connection, connect_to_mongo
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await connect_to_mongo()
     await init_db()
     yield
+    await close_mongo_connection()
 
 
 app = FastAPI(

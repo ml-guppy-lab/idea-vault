@@ -141,3 +141,93 @@ mongodb://idea_user:idea_pass@localhost:27017/idea_vault?authSource=admin
 4. Click **Create Database**
 
 > `authSource=admin` is required because `idea_user` is a root user created in the `admin` database by Docker Compose.
+
+---
+
+## MongoDB — FastAPI Integration (Motor)
+
+### Files created / changed
+
+| File | Change |
+|---|---|
+| `backend/app/db/mongodb.py` | New — Motor client, `connect_to_mongo()`, `close_mongo_connection()`, `get_mongo_db()` |
+| `backend/app/core/config.py` | Added `MONGO_URI` and `MONGO_DB_NAME` settings |
+| `backend/app/main.py` | Wired `connect_to_mongo()` / `close_mongo_connection()` into lifespan |
+| `backend/requirements.txt` | Added `motor>=3.4.0` |
+| `backend/.env` | Added `MONGO_DB_NAME=idea_vault`, updated `MONGO_URI` to `localhost` |
+
+### Install Motor
+
+```bash
+cd backend
+source venv/bin/activate
+pip install motor
+```
+
+### How it works
+
+- On startup, `connect_to_mongo()` connects to MongoDB and creates an index on `userId` in the `ideas` collection (safe to re-run — skipped if index exists)
+- On shutdown, `close_mongo_connection()` closes the client cleanly
+- Use `get_mongo_db()` as a FastAPI dependency in routes that need MongoDB
+
+### Verify it's working
+
+```bash
+# 1. Make sure MongoDB container is running
+docker-compose up -d mongo
+
+# 2. Start the backend
+cd backend && source venv/bin/activate
+uvicorn app.main:app --reload --port 8000
+```
+
+On startup you should see **no errors** in the terminal. Then confirm the index was created:
+
+1. Open **MongoDB Compass** → connect
+2. Go to `idea_vault` → `ideas` → **Indexes** tab
+3. You should see an index on `userId` listed there
+
+---
+
+## Backend — Pydantic Settings Fix (`extra="ignore"`)
+
+### Problem
+
+Pydantic-settings reads **every variable** from `.env` and tries to map each one to a field in the `Settings` class. Our `.env` contains Docker-only vars like `POSTGRES_USER`, `MONGO_USER`, `REDIS_URL` that aren't declared in `Settings` — this caused a `ValidationError: Extra inputs are not permitted` crash on startup.
+
+### Fix
+
+Added `extra="ignore"` to `model_config` in `backend/app/core/config.py`:
+
+```python
+model_config = SettingsConfigDict(
+    env_file=".env",
+    env_file_encoding="utf-8",
+    extra="ignore",   # silently skip .env vars not declared in Settings
+)
+```
+
+This tells pydantic to quietly ignore any extra `.env` vars. The Docker-only vars are still read by Docker Compose directly — they just don't need to be in the `Settings` class.
+
+---
+
+## Backend — Schema & Route Alignment
+
+### Why two idea schema files?
+
+The original `schemas/idea.py` was a placeholder with basic fields. It was rewritten to properly reflect how ideas are stored in **MongoDB** (not SQL):
+
+| Class | Purpose |
+|---|---|
+| `IdeaCreate` | What the frontend sends when creating an idea |
+| `IdeaUpdate` | Partial update — all fields optional |
+| `IdeaResponse` | What the API returns — maps MongoDB `_id` → `id` via alias |
+| `IdeaInDB` | The full document shape written into MongoDB |
+
+`IdeaResponse` uses `Field(alias="_id")` because MongoDB stores the primary key as `_id`, but the frontend should receive it as `id`.
+
+### Why `api/ideas.py` was updated
+
+The route file was importing `IdeaRead` (old name). After the schema rewrite renamed it to `IdeaResponse`, all imports and `response_model=` references in `api/ideas.py` were updated to match.
+
+> **Note:** The ideas routes still use SQLAlchemy as a placeholder. They will be fully rewritten to use `get_mongo_db()` when the ideas CRUD epic is implemented.
