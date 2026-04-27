@@ -483,3 +483,88 @@ After a successful login, confirm the refresh token row in **TablePlus** → `id
 
 Decode the access token at [jwt.io](https://jwt.io) to confirm the `sub` (user id) and `exp` (expiry ~15 min from now) claims.
 
+---
+
+## Auth — POST /auth/refresh
+
+### What it does
+
+Accepts the opaque refresh token (issued at login) as a JSON body. Looks it up in the `refresh_tokens` table in PostgreSQL. If found and not expired, issues a brand-new JWT access token. The refresh token itself is **not rotated** — it stays the same until the user logs out or it expires after 180 days.
+
+### Why this endpoint exists
+
+The access token is a short-lived JWT (15 minutes). Once it expires, the client would otherwise have to ask the user to log in again. The refresh token solves this: the client silently calls `/auth/refresh` with the long-lived token it already has, and gets a fresh access token — no password re-entry needed.
+
+### Why the refresh token is NOT rotated on every call
+
+Token rotation (issuing a new refresh token on every use) is a common pattern but adds complexity: the client must always store the latest token, and a race condition can log users out if two requests fire simultaneously. For this app at this stage, the simpler approach — keep the same refresh token alive until logout — is correct. Rotation can be added later when we implement `/auth/logout`.
+
+### Files created / changed
+
+| File | What changed |
+|---|---|
+| `backend/app/schemas/user.py` | Added `RefreshRequest` (input — just the `refresh_token` string); added `AccessToken` (output — only `access_token`, no new refresh token) |
+| `backend/app/api/auth.py` | `POST /refresh` — DB lookup, expiry check, expired row cleanup, new JWT issued |
+
+### How it works step by step
+
+1. Client sends `{ "refresh_token": "..." }` to `POST /auth/refresh`
+2. The token string is looked up in `refresh_tokens` by exact match
+3. If not found → `401` (generic message — same as if it were forged)
+4. If found but `expires_at` is in the past → delete the row from DB, return `401`
+5. If found and valid → call `create_access_token(subject=record.user_id)` → return new JWT
+
+The expired-row deletion is intentional: no background job is needed to clean up stale tokens — they delete themselves on the next access attempt.
+
+### Why a separate `AccessToken` response schema
+
+`/login` returns `Token` which has both `access_token` and `refresh_token`. `/refresh` should only return a new `access_token` — the caller already has the refresh token and it hasn't changed. Using a different schema makes the contract explicit and prevents accidentally returning a stale or empty `refresh_token` field.
+
+### How to test in Swagger UI
+
+Go to `http://localhost:8000/docs`.
+
+**Step 1 — Get tokens from login**
+
+Open `POST /auth/login` → **Try it out** → enter:
+```json
+{ "email": "you@example.com", "password": "Secret123" }
+```
+Copy the `refresh_token` string from the response.
+
+**Step 2 — Call the refresh endpoint**
+
+Open `POST /auth/refresh` → **Try it out** → enter:
+```json
+{ "refresh_token": "paste-your-token-here" }
+```
+Expected `200` response:
+```json
+{ "access_token": "eyJ...", "token_type": "bearer" }
+```
+
+**Step 3 — Verify via curl**
+
+```bash
+# Successful refresh
+curl -X POST http://localhost:8000/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "your-token-here"}'
+# → {"access_token": "eyJ...", "token_type": "bearer"}
+
+# Invalid token — returns 401
+curl -X POST http://localhost:8000/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "not-a-real-token"}'
+# → {"detail": "Invalid or expired refresh token"}
+```
+
+**Step 4 — Test expiry handling**
+
+In **TablePlus** → `refresh_tokens` table → find your row → manually change `expires_at` to a past timestamp (e.g. `2020-01-01 00:00:00+00`). Call `/auth/refresh` again — it should return `401` and the row should be **deleted** from the table automatically.
+
+**Step 5 — Confirm the new access token**
+
+Paste the returned `access_token` into [jwt.io](https://jwt.io). The `sub` should match your user's `id` and `exp` should be ~15 minutes from the time you called refresh.
+
+
