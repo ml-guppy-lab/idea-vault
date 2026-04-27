@@ -15,21 +15,31 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
 async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)):
+    # Pydantic has already validated email format and password strength by this point
+
+    # Check if a user with this email already exists
     result = await db.execute(select(User).where(User.email == payload.email))
     if result.scalar_one_or_none():
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="Email already registered"
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already registered",
         )
+
+    # Hash the password — the plain text password is never stored
     user = User(
         email=payload.email,
         hashed_password=hash_password(payload.password),
-        auth_provider=AuthProvider.local,
+        auth_provider=AuthProvider.local,  # default for email/password signup
         is_active=True,
         created_at=datetime.now(timezone.utc),
     )
+
+    # Persist to PostgreSQL
     db.add(user)
     await db.commit()
-    await db.refresh(user)
+    await db.refresh(user)  # reload from DB to get the generated id
+
+    # UserRead only returns id and email — hashed_password is never exposed
     return user
 
 
