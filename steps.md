@@ -118,3 +118,26 @@ docker-compose down
 # Stop and wipe all DB data (volumes)
 docker-compose down -v
 ```
+
+---
+
+## MongoDB — Compass Connection
+
+### 1. Start MongoDB
+```bash
+docker-compose up -d mongo
+```
+
+### 2. Connect in MongoDB Compass
+Use this connection string:
+```
+mongodb://idea_user:idea_pass@localhost:27017/idea_vault?authSource=admin
+```
+
+### 3. Create database and collection
+1. Click **"+"** next to Databases in the sidebar
+2. Database name: `idea_vault`
+3. Collection name: `ideas`
+4. Click **Create Database**
+
+> `authSource=admin` is required because `idea_user` is a root user created in the `admin` database by Docker Compose.
