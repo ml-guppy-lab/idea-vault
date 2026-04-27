@@ -313,3 +313,53 @@ uvicorn app.main:app --reload --port 8000
 5. Click **Connect**
 
 You'll see `users`, `refresh_tokens`, and `ideas` tables in the sidebar.
+
+---
+
+## Redis — Setup & Connection
+
+### Why Redis?
+
+Redis is used for **rate limiting on auth endpoints** (register/login). It stores request counts per IP with a TTL so they expire automatically.
+
+### Files created / changed
+
+| File | What changed |
+|---|---|
+| `backend/app/db/redis.py` | New — async Redis client, `connect_to_redis()` (pings on startup), `close_redis_connection()`, `get_redis()` dependency |
+| `backend/app/core/config.py` | Added `REDIS_URL` setting |
+| `backend/app/main.py` | `connect_to_redis()` / `close_redis_connection()` wired into lifespan |
+| `backend/requirements.txt` | Added `redis>=5.0.0` |
+| `backend/test_redis.py` | Standalone ping test script |
+
+### Important: localhost vs Docker service name
+
+- **Running locally** → `REDIS_URL=redis://localhost:6379` (set in `backend/.env`)
+- **Running in Docker** → `redis://redis:6379` (Docker service name, used inside containers)
+
+Always make sure `.env` uses `localhost` when developing locally.
+
+### Install and start
+
+```bash
+cd backend && source venv/bin/activate
+pip install redis
+
+# Start Redis container
+docker-compose up -d redis
+```
+
+### Test the connection
+
+```bash
+python test_redis.py
+# → Redis response: True  (means PONG — connection works)
+```
+
+### Verify on backend startup
+
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+
+On startup, `connect_to_redis()` runs `ping()` — if Redis isn't reachable, the server won't start. A clean startup with no errors means Redis is connected.

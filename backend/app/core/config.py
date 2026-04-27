@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     MONGO_URI: str = "mongodb://idea_user:idea_pass@localhost:27017/idea_vault?authSource=admin"
     MONGO_DB_NAME: str = "idea_vault"
 
+    # Redis
+    REDIS_URL: str = "redis://localhost:6379"
+
     # CORS
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
 

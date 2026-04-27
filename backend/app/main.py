@@ -7,6 +7,7 @@ from app.api import auth, ideas
 from app.core.config import settings
 from app.db.postgres import init_db
 from app.db.mongodb import close_mongo_connection, connect_to_mongo
+from app.db.redis import close_redis_connection, connect_to_redis
 
 # Import SQLAlchemy models so they are registered with Base before create_all
 # Only PostgreSQL models — ideas are stored in MongoDB, not here
@@ -15,9 +16,11 @@ from app.models import user, refresh_token  # noqa: F401
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await connect_to_redis()
     await connect_to_mongo()
     await init_db()
     yield
+    await close_redis_connection()
     await close_mongo_connection()
 
 
