@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
@@ -5,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.postgres import get_db
-from app.models.user import User
+from app.models.user import AuthProvider, User
 from app.schemas.user import Token, UserCreate, UserRead
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -21,6 +23,9 @@ async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)):
     user = User(
         email=payload.email,
         hashed_password=hash_password(payload.password),
+        auth_provider=AuthProvider.local,
+        is_active=True,
+        created_at=datetime.now(timezone.utc),
     )
     db.add(user)
     await db.commit()

@@ -8,7 +8,8 @@ from app.core.config import settings
 from app.db.postgres import init_db
 from app.db.mongodb import close_mongo_connection, connect_to_mongo
 
-# Import all SQLAlchemy models so they are registered with Base before create_all
+# Import SQLAlchemy models so they are registered with Base before create_all
+# Only PostgreSQL models — ideas are stored in MongoDB, not here
 from app.models import user, refresh_token  # noqa: F401
 
 
