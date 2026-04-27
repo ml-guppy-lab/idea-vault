@@ -567,4 +567,106 @@ In **TablePlus** → `refresh_tokens` table → find your row → manually chang
 
 Paste the returned `access_token` into [jwt.io](https://jwt.io). The `sub` should match your user's `id` and `exp` should be ~15 minutes from the time you called refresh.
 
+---
+
+## Auth — POST /auth/logout
+
+### What it does
+
+Requires a valid JWT access token in the `Authorization: Bearer` header. Accepts the refresh token to revoke in the request body. Deletes that specific refresh token from PostgreSQL — it can no longer be used to generate new access tokens. Returns `200 OK` with `{"message": "Logged out successfully"}`.
+
+### Why it works this way
+
+**Why require a JWT at all?**
+Without it, anyone who gets hold of a refresh token string could silently revoke someone else's session. The JWT proves the caller is the legitimate owner of that session.
+
+**Why accept a specific refresh token instead of deleting all?**
+Deleting all tokens for a user would log them out of every device simultaneously ("log out everywhere"). That's a separate feature. This endpoint revokes only the one token the client passes — the session on the current device ends, while other device sessions remain active.
+
+**Why return 200 even if the token wasn't found?**
+Logout is idempotent by design. If the client calls it twice (e.g. network retry), the second call should not return an error — the end state is the same either way: the token is gone.
+
+### Files created / changed
+
+| File | What changed |
+|---|---|
+| `backend/app/schemas/user.py` | Added `LogoutRequest` — carries the `refresh_token` to revoke |
+| `backend/app/api/auth.py` | Added `HTTPBearer` import and `_bearer` scheme; added `get_current_user_id` dependency that validates the JWT and extracts the user id; added `POST /logout` endpoint |
+
+### How `get_current_user_id` works
+
+```python
+_bearer = HTTPBearer()
+
+def get_current_user_id(credentials = Depends(_bearer)) -> str:
+    user_id = decode_access_token(credentials.credentials)
+    if not user_id:
+        raise HTTPException(401, "Invalid or expired access token")
+    return user_id
+```
+
+`HTTPBearer()` automatically reads the `Authorization: Bearer <token>` header. FastAPI returns `403` if the header is missing entirely, `401` if the JWT is invalid or expired.
+
+This dependency is reusable — any future protected endpoint can add `user_id: str = Depends(get_current_user_id)` to require authentication.
+
+### How to test in Swagger UI
+
+Go to `http://localhost:8000/docs`.
+
+**Step 1 — Login to get both tokens**
+
+Open `POST /auth/login` → **Try it out** → enter your credentials. Copy both `access_token` and `refresh_token` from the response.
+
+**Step 2 — Authorize Swagger with the access token**
+
+Click the **Authorize** button (padlock icon, top right of Swagger) → paste your `access_token` → click **Authorize**. Swagger will now send `Authorization: Bearer <token>` automatically on all requests.
+
+**Step 3 — Call logout**
+
+Open `POST /auth/logout` → **Try it out** → enter:
+```json
+{ "refresh_token": "paste-your-refresh-token-here" }
+```
+Expected `200` response:
+```json
+{ "message": "Logged out successfully" }
+```
+
+**Step 4 — Confirm the token is gone**
+
+Open **TablePlus** → `idea_vault_auth` → `refresh_tokens` table. The row should no longer exist.
+
+**Step 5 — Verify the refresh token no longer works**
+
+Call `POST /auth/refresh` with the same refresh token you just revoked:
+```json
+{ "refresh_token": "same-token-here" }
+```
+Expected: `401 Invalid or expired refresh token`.
+
+**Step 6 — Test without Authorization header via curl**
+
+```bash
+# Missing Authorization header — returns 403
+curl -X POST http://localhost:8000/auth/logout \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "any-token"}'
+# → 403 Forbidden
+
+# Expired/invalid JWT — returns 401
+curl -X POST http://localhost:8000/auth/logout \
+  -H "Authorization: Bearer not-a-real-jwt" \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "any-token"}'
+# → {"detail": "Invalid or expired access token"}
+
+# Valid JWT + correct refresh token — returns 200
+curl -X POST http://localhost:8000/auth/logout \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "YOUR_REFRESH_TOKEN"}'
+# → {"message": "Logged out successfully"}
+```
+
+
 

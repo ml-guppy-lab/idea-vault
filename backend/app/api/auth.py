@@ -1,17 +1,37 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.security import create_access_token, create_refresh_token, hash_password, verify_password
+from app.core.security import create_access_token, create_refresh_token, decode_access_token, hash_password, verify_password
 from app.db.postgres import get_db
 from app.models.refresh_token import RefreshToken
 from app.models.user import AuthProvider, User
-from app.schemas.user import AccessToken, RefreshRequest, Token, UserCreate, UserLogin, UserRead
+from app.schemas.user import AccessToken, LogoutRequest, RefreshRequest, Token, UserCreate, UserLogin, UserRead
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Extracts the Bearer token from the Authorization header.
+# FastAPI will automatically return 403 if the header is missing entirely.
+_bearer = HTTPBearer()
+
+
+def get_current_user_id(
+    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
+) -> str:
+    """Dependency — validates the JWT and returns the user id (the `sub` claim)."""
+    user_id = decode_access_token(credentials.credentials)
+    if not user_id:
+        # Token is missing, malformed, or expired
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired access token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user_id
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
@@ -130,3 +150,29 @@ async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)):
     new_access_token = create_access_token(subject=record.user_id)
 
     return AccessToken(access_token=new_access_token)
+
+
+@router.post("/logout", status_code=status.HTTP_200_OK)
+async def logout(
+    payload: LogoutRequest,
+    user_id: str = Depends(get_current_user_id),  # JWT must be valid to reach here
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    # Find the specific refresh token AND confirm it belongs to the calling user.
+    # The user_id check prevents one user from revoking another user's session.
+    result = await db.execute(
+        select(RefreshToken).where(
+            RefreshToken.token == payload.refresh_token,
+            RefreshToken.user_id == user_id,
+        )
+    )
+    record = result.scalar_one_or_none()
+
+    if record:
+        # Delete only this specific token — other sessions on other devices are unaffected
+        await db.delete(record)
+        await db.commit()
+
+    # Always return 200, even if the token wasn't found.
+    # Idempotent logout: calling this twice should not be an error from the client's perspective.
+    return {"message": "Logged out successfully"}

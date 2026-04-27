@@ -54,3 +54,9 @@ class AccessToken(BaseModel):
     # Returned by /refresh — only a new access token, refresh token is unchanged
     access_token: str
     token_type: str = "bearer"
+
+
+class LogoutRequest(BaseModel):
+    # The specific refresh token to revoke — allows targeted logout per device
+    # without affecting sessions on other devices
+    refresh_token: str
