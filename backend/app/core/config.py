@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = "redis://localhost:6379"
 
+    # Rate limiting (applied to /auth/login and /auth/register)
+    RATE_LIMIT_MAX_ATTEMPTS: int = 5    # max requests allowed per window
+    RATE_LIMIT_WINDOW_SECONDS: int = 900  # 15 minutes in seconds
+
     # CORS
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
 

@@ -8,9 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
+import redis.asyncio as aioredis
+
 from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, decode_access_token, hash_password, verify_password
 from app.db.postgres import get_db
+from app.db.redis import get_redis
 from app.models.refresh_token import RefreshToken
 from app.models.user import AuthProvider, User
 from app.schemas.user import AccessToken, LogoutRequest, RefreshRequest, Token, UserCreate, UserLogin, UserRead
@@ -38,6 +41,70 @@ _oauth.register(
     },
 )
 
+# ---------------------------------------------------------------------------
+# Rate limiting dependency
+#
+# Uses Redis INCR + EXPIRE to track how many times a given IP has hit an
+# endpoint within the current window (15 minutes by default).
+#
+# Key format: ratelimit:{endpoint}:{client_ip}
+# Example:    ratelimit:register:127.0.0.1
+#
+# On the FIRST request in a window, INCR creates the key with value 1 and
+# EXPIRE sets the TTL. On subsequent requests, INCR increments the counter
+# but EXPIRE is NOT called again — so the TTL only starts once, not per
+# request. The window resets naturally when the key expires.
+# ---------------------------------------------------------------------------
+
+
+async def check_rate_limit(
+    request: Request,
+    redis: aioredis.Redis = Depends(get_redis),
+) -> None:
+    """Dependency — enforces per-IP rate limiting using Redis.
+
+    Injects into a route via `Depends(check_rate_limit)`. The endpoint name
+    is extracted from the request path so the same function works for both
+    /register and /login with separate counters per endpoint.
+    """
+    # Use the real client IP. X-Forwarded-For is checked first in case the
+    # app sits behind a proxy (e.g. nginx). Falls back to direct connection IP.
+    client_ip = request.headers.get("X-Forwarded-For", request.client.host)
+
+    # Strip the /api prefix and use the last path segment as the endpoint label
+    # e.g. /api/auth/register → "register", /api/auth/login → "login"
+    endpoint = request.url.path.rstrip("/").rsplit("/", 1)[-1]
+
+    redis_key = f"ratelimit:{endpoint}:{client_ip}"
+
+    # Atomically increment the counter. Returns the new value after increment.
+    current_count = await redis.incr(redis_key)
+
+    if current_count == 1:
+        # First request in this window — set the TTL so the key expires
+        # automatically after the window closes. We only set it once so the
+        # window doesn't slide on every request.
+        await redis.expire(redis_key, settings.RATE_LIMIT_WINDOW_SECONDS)
+
+    if current_count > settings.RATE_LIMIT_MAX_ATTEMPTS:
+        # Calculate how many seconds remain on this key so we can tell the
+        # caller exactly when they can try again.
+        ttl = await redis.ttl(redis_key)
+        minutes = ttl // 60
+        seconds = ttl % 60
+
+        # Retry-After header is a standard HTTP mechanism to tell clients
+        # how long to wait before retrying (value is in seconds).
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"Too many attempts. Try again in "
+                f"{minutes}m {seconds}s."
+            ),
+            headers={"Retry-After": str(ttl)},
+        )
+
+
 # Extracts the Bearer token from the Authorization header.
 # FastAPI will automatically return 403 if the header is missing entirely.
 _bearer = HTTPBearer()
@@ -59,7 +126,11 @@ def get_current_user_id(
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
-async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)):
+async def register(
+    payload: UserCreate,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(check_rate_limit),  # enforces 5 attempts per IP per 15 min
+):
     # Pydantic has already validated email format and password strength by this point
 
     # Check if a user with this email already exists
@@ -89,7 +160,11 @@ async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token)
-async def login(payload: UserLogin, db: AsyncSession = Depends(get_db)):
+async def login(
+    payload: UserLogin,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(check_rate_limit),  # enforces 5 attempts per IP per 15 min
+):
     # Look up the user by email
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()

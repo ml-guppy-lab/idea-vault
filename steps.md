@@ -813,6 +813,151 @@ curl -X POST http://localhost:8000/api/auth/logout \
 # → {"message": "Logged out successfully"}
 ```
 
+---
+
+## Auth — Rate Limiting on /auth/login and /auth/register
+
+### What it does
+
+Both `/auth/login` and `/auth/register` are protected by a per-IP rate limit: **5 attempts per 15 minutes**. On the 6th attempt within the window, the endpoint returns `429 Too Many Requests` with an exact message telling the user how long to wait. The counter resets automatically when the 15-minute TTL expires in Redis.
+
+### Why Redis for rate limiting?
+
+Redis is the right tool for this:
+- `INCR` is atomic — no race conditions even under concurrent requests
+- Keys expire automatically via `EXPIRE` — no cleanup job needed
+- It's already running in the stack for exactly this purpose
+
+### How it works — the INCR + EXPIRE pattern
+
+```
+First request  → INCR key → value=1 → set EXPIRE 900s → allow
+Second request → INCR key → value=2 →                 → allow
+...
+Fifth request  → INCR key → value=5 →                 → allow
+Sixth request  → INCR key → value=6 → TTL check       → 429
+```
+
+`EXPIRE` is only called **once** (when value becomes 1). This means the window is **fixed** from the first request — it does not slide on every attempt. After 15 minutes, the key expires and the counter resets to 0.
+
+### Redis key format
+
+```
+ratelimit:{endpoint}:{client_ip}
+```
+
+Examples:
+- `ratelimit:login:127.0.0.1`
+- `ratelimit:register:192.168.1.5`
+
+Separate keys per endpoint mean login attempts don't count against register attempts and vice versa.
+
+### Files created / changed
+
+| File | What changed |
+|---|---|
+| `backend/app/core/config.py` | Added `RATE_LIMIT_MAX_ATTEMPTS = 5` and `RATE_LIMIT_WINDOW_SECONDS = 900` |
+| `backend/app/api/auth.py` | Added `check_rate_limit` async dependency; injected it into `POST /register` and `POST /login` via `Depends(check_rate_limit)` |
+
+### How `check_rate_limit` works
+
+```python
+async def check_rate_limit(request: Request, redis = Depends(get_redis)):
+    client_ip = request.headers.get("X-Forwarded-For", request.client.host)
+    endpoint  = request.url.path.rsplit("/", 1)[-1]   # "login" or "register"
+    key       = f"ratelimit:{endpoint}:{client_ip}"
+
+    count = await redis.incr(key)       # atomic — safe under concurrency
+    if count == 1:
+        await redis.expire(key, 900)    # set TTL only on first request in window
+
+    if count > 5:
+        ttl = await redis.ttl(key)
+        raise HTTPException(429, f"Too many attempts. Try again in {ttl//60}m {ttl%60}s.",
+                            headers={"Retry-After": str(ttl)})
+```
+
+The dependency is injected as `_: None = Depends(check_rate_limit)` — the `_` signals it's a side-effect dependency with no return value used in the route body.
+
+### How to verify
+
+**Step 1 — Make sure Redis and the backend are running**
+
+```bash
+docker-compose up -d redis
+uvicorn app.main:app --reload --port 8000
+```
+
+**Step 2 — Hit /auth/login 6 times rapidly from the same IP**
+
+```bash
+for i in {1..6}; do
+  echo "Attempt $i:"
+  curl -s -X POST http://localhost:8000/api/auth/login \
+    -H "Content-Type: application/json" \
+    -d '{"email": "test@example.com", "password": "wrongpassword"}' | python3 -m json.tool
+  echo "---"
+done
+```
+
+Expected output — attempts 1–5 return `401 Invalid credentials`, attempt 6 returns:
+```json
+{
+  "detail": "Too many attempts. Try again in 14m 58s."
+}
+```
+
+**Step 3 — Check the Retry-After header**
+
+```bash
+curl -si -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "test@example.com", "password": "wrong"}' | grep -i "retry-after"
+# → Retry-After: 892
+```
+
+**Step 4 — Inspect the Redis key directly**
+
+```bash
+# Connect to the Redis container
+docker-compose exec redis redis-cli
+
+# List rate limit keys
+KEYS ratelimit:*
+# → 1) "ratelimit:login:127.0.0.1"
+
+# Check the current count
+GET ratelimit:login:127.0.0.1
+# → "6"
+
+# Check remaining TTL in seconds
+TTL ratelimit:login:127.0.0.1
+# → 887  (seconds until the window resets)
+```
+
+**Step 5 — Verify the same limit applies to /auth/register**
+
+```bash
+for i in {1..6}; do
+  curl -s -X POST http://localhost:8000/api/auth/register \
+    -H "Content-Type: application/json" \
+    -d '{"email": "spam@example.com", "password": "Spam1234"}' | python3 -m json.tool
+done
+# → 6th call returns 429
+```
+
+**Step 6 — Confirm separate counters per endpoint**
+
+After getting rate limited on `/login`, you can still make attempts on `/register` (and vice versa) until that endpoint's own counter hits 5.
+
+```bash
+# These are tracked independently
+KEYS ratelimit:*
+# → 1) "ratelimit:login:127.0.0.1"
+# → 2) "ratelimit:register:127.0.0.1"
+```
+
+
 
 
 
