@@ -1,3 +1,23 @@
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# To test one api - logout 
+
+# Step 1 — Log in now to get a fresh token
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "test1@example.com", "password": "112233"}' | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['access_token'], r['refresh_token'])")
+
+ACCESS=$(echo $TOKEN | awk '{print $1}')
+REFRESH=$(echo $TOKEN | awk '{print $2}')
+
+# Step 2 — Use the fresh token immediately
+curl -s -X POST http://localhost:8000/api/auth/logout \
+  -H "Authorization: Bearer $ACCESS" \
+  -H "Content-Type: application/json" \
+  -d "{\"refresh_token\": \"$REFRESH\"}"
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
 # Project Setup Steps
 
 > All features must be done in `feature/feature-name` branches that merge into `dev`. Never commit directly to `main`.
