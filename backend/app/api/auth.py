@@ -2,7 +2,6 @@ from datetime import datetime, timedelta, timezone
 
 from authlib.integrations.starlette_client import OAuth
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
@@ -11,7 +10,13 @@ from starlette.responses import RedirectResponse
 import redis.asyncio as aioredis
 
 from app.core.config import settings
-from app.core.security import create_access_token, create_refresh_token, decode_access_token, hash_password, verify_password
+from app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    get_current_user,
+    hash_password,
+    verify_password,
+)
 from app.db.postgres import get_db
 from app.db.redis import get_redis
 from app.models.refresh_token import RefreshToken
@@ -105,24 +110,8 @@ async def check_rate_limit(
         )
 
 
-# Extracts the Bearer token from the Authorization header.
-# FastAPI will automatically return 403 if the header is missing entirely.
-_bearer = HTTPBearer()
-
-
-def get_current_user_id(
-    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
-) -> str:
-    """Dependency — validates the JWT and returns the user id (the `sub` claim)."""
-    user_id = decode_access_token(credentials.credentials)
-    if not user_id:
-        # Token is missing, malformed, or expired
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired access token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return user_id
+# get_current_user is defined in app.core.security and imported above.
+# Use it in any route as:  current_user: User = Depends(get_current_user)
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
@@ -254,15 +243,18 @@ async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)):
 @router.post("/logout", status_code=status.HTTP_200_OK)
 async def logout(
     payload: LogoutRequest,
-    user_id: str = Depends(get_current_user_id),  # JWT must be valid to reach here
+    # get_current_user validates the JWT, fetches the User row, and returns it.
+    # If the token is missing, expired, or invalid — 401 is raised automatically.
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     # Find the specific refresh token AND confirm it belongs to the calling user.
-    # The user_id check prevents one user from revoking another user's session.
+    # current_user.id is the verified identity from the JWT — prevents one user
+    # from revoking another user's session.
     result = await db.execute(
         select(RefreshToken).where(
             RefreshToken.token == payload.refresh_token,
-            RefreshToken.user_id == user_id,
+            RefreshToken.user_id == current_user.id,
         )
     )
     record = result.scalar_one_or_none()

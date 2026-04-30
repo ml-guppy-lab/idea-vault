@@ -957,6 +957,121 @@ KEYS ratelimit:*
 # → 2) "ratelimit:register:127.0.0.1"
 ```
 
+---
+
+## Auth — `get_current_user` Dependency (app/core/security.py)
+
+### What it does
+
+`get_current_user` is a reusable FastAPI dependency that protects any route. Add it to a route's parameters and that route automatically requires a valid JWT. It reads the `Authorization: Bearer` header, verifies the JWT signature, decodes the user ID, fetches the full `User` row from PostgreSQL, and returns it. If anything fails, the route is never reached — FastAPI returns the error automatically.
+
+### Usage in any route
+
+```python
+from app.core.security import get_current_user
+from app.models.user import User
+
+@router.get("/me")
+async def me(current_user: User = Depends(get_current_user)):
+    return {"id": current_user.id, "email": current_user.email}
+```
+
+That's all that's needed. FastAPI discovers the dependency, runs it before the route handler, and either injects the `User` object or short-circuits with an error.
+
+### What it checks (in order)
+
+| Check | Failure response |
+|---|---|
+| `Authorization: Bearer` header is present | `403 Forbidden` (HTTPBearer handles this automatically) |
+| JWT signature is valid and not expired | `401 Unauthorized` — `"Invalid or expired access token"` |
+| User ID from token exists in PostgreSQL | `401 Unauthorized` — same generic message (prevents leaking account info) |
+| `user.is_active == True` | `403 Forbidden` — `"Account is disabled"` |
+
+### Why 401 for "user not found"
+
+If a user is deleted from the database after their token was issued, the token is still cryptographically valid — but the user no longer exists. Returning `401` (not `404`) is intentional: we never confirm whether the email/ID exists to prevent information leakage.
+
+### Why the User model is imported inside the function body
+
+`security.py` importing `models/user.py` at the module level would create a circular import:
+
+```
+security.py → models/user.py → db/postgres.py → (config) ✓
+```
+
+This is actually fine. But importing `User` at the top of `security.py` would work — the local import inside the function body is used as a precaution to make the module easy to restructure in the future without risk of cycles.
+
+### Files created / changed
+
+| File | What changed |
+|---|---|
+| `backend/app/core/security.py` | Added `_bearer = HTTPBearer()` and `get_current_user` async dependency |
+| `backend/app/api/auth.py` | Removed local `_bearer` and `get_current_user_id`; imported `get_current_user` from security; updated `POST /logout` to use `current_user: User = Depends(get_current_user)` |
+
+### How to verify
+
+**Step 1 — Restart the backend**
+
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+
+**Step 2 — Call a protected endpoint without a token**
+
+```bash
+curl -s http://localhost:8000/api/auth/logout \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "anything"}'
+# → 403 {"detail": "Not authenticated"}
+# HTTPBearer returns 403 when the Authorization header is entirely missing
+```
+
+**Step 3 — Call with an invalid token**
+
+```bash
+curl -s http://localhost:8000/api/auth/logout \
+  -X POST \
+  -H "Authorization: Bearer not-a-real-jwt" \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "anything"}'
+# → 401 {"detail": "Invalid or expired access token"}
+```
+
+**Step 4 — Call with a valid token**
+
+```bash
+# First, log in to get a token
+curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}'
+# Copy access_token and refresh_token from the response
+
+# Then call logout with the real token
+curl -s -X POST http://localhost:8000/api/auth/logout \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "YOUR_REFRESH_TOKEN"}'
+# → 200 {"message": "Logged out successfully"}
+```
+
+**Step 5 — Add it to a new route (example)**
+
+Any future route that needs authentication just adds one parameter:
+
+```python
+from app.core.security import get_current_user
+from app.models.user import User
+
+@router.get("/ideas")
+async def list_ideas(current_user: User = Depends(get_current_user)):
+    # current_user is the authenticated User row — guaranteed valid by this point
+    ...
+```
+
+No additional code is needed — FastAPI handles the entire auth flow automatically.
+
+
 
 
 
