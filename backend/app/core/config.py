@@ -32,5 +32,13 @@ class Settings(BaseSettings):
     # CORS
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
 
+    # Google OAuth
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    # Must match exactly what is registered in Google Cloud Console
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/auth/google/callback"
+    # Where the backend redirects the browser after OAuth succeeds
+    FRONTEND_URL: str = "http://localhost:3000"
+
 
 settings = Settings()

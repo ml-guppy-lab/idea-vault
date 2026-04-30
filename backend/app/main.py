@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 
 from app.api import auth, ideas
 from app.core.config import settings
@@ -37,6 +38,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# SessionMiddleware is required by authlib's starlette integration.
+# During the OAuth flow, authlib stores the `state` parameter in the session cookie
+# to verify the callback came from the same browser that started the login (CSRF protection).
+# SECRET_KEY is used to cryptographically sign the session cookie via itsdangerous.
+app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(ideas.router, prefix="/api")

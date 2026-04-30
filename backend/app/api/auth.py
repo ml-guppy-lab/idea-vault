@@ -1,9 +1,12 @@
 from datetime import datetime, timedelta, timezone
 
+from authlib.integrations.starlette_client import OAuth
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import Request
+from starlette.responses import RedirectResponse
 
 from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, decode_access_token, hash_password, verify_password
@@ -13,6 +16,27 @@ from app.models.user import AuthProvider, User
 from app.schemas.user import AccessToken, LogoutRequest, RefreshRequest, Token, UserCreate, UserLogin, UserRead
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# ---------------------------------------------------------------------------
+# OAuth client — configured once at module load time.
+#
+# server_metadata_url points to Google's OpenID Connect discovery document.
+# Authlib fetches it on first use to learn Google's authorization endpoint,
+# token endpoint, JWKS URL, etc. — we never have to hardcode those URLs.
+# ---------------------------------------------------------------------------
+_oauth = OAuth()
+_oauth.register(
+    name="google",
+    client_id=settings.GOOGLE_CLIENT_ID,
+    client_secret=settings.GOOGLE_CLIENT_SECRET,
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={
+        # openid  — enables id_token (JWT with user claims)
+        # email   — includes the user's email address
+        # profile — includes name, picture, etc.
+        "scope": "openid email profile",
+    },
+)
 
 # Extracts the Bearer token from the Authorization header.
 # FastAPI will automatically return 403 if the header is missing entirely.
@@ -176,3 +200,110 @@ async def logout(
     # Always return 200, even if the token wasn't found.
     # Idempotent logout: calling this twice should not be an error from the client's perspective.
     return {"message": "Logged out successfully"}
+
+
+# ---------------------------------------------------------------------------
+# Google OAuth — Authorization Code Flow
+#
+# Step 1: Browser visits GET /auth/google
+#         → Backend generates a random `state` value, stores it in the signed
+#           session cookie (via SessionMiddleware), and redirects the browser
+#           to Google's authorization URL.
+#
+# Step 2: User logs in with Google and consents.
+#
+# Step 3: Google redirects the browser to GET /auth/google/callback?code=...&state=...
+#         → Backend validates the state from the session (CSRF protection),
+#           exchanges the code for tokens, fetches user info, creates or finds
+#           the user in PostgreSQL, issues our own JWT + refresh token, and
+#           redirects the browser to the frontend with those tokens in the URL.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/google", include_in_schema=False)
+async def google_login(request: Request):
+    # Build the redirect URL that Google will send the browser back to after login.
+    # authlib stores a random `state` value in the session cookie here so it can
+    # verify the callback isn't forged (CSRF).
+    return await _oauth.google.authorize_redirect(
+        request, settings.GOOGLE_REDIRECT_URI
+    )
+
+
+@router.get("/google/callback", include_in_schema=False)
+async def google_callback(request: Request, db: AsyncSession = Depends(get_db)):
+    # Exchange the authorization code Google sent us for an access token + id_token.
+    # Authlib also validates the `state` from the session cookie here.
+    try:
+        token = await _oauth.google.authorize_access_token(request)
+    except Exception:
+        # State mismatch, code already used, or any other OAuth error
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OAuth authentication failed. Please try again.",
+        )
+
+    # With the `openid` scope, authlib automatically parses the id_token and
+    # populates `userinfo` with verified claims (email, name, picture, etc.).
+    user_info = token.get("userinfo")
+    if not user_info or not user_info.get("email"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not retrieve email from Google. Make sure email scope is granted.",
+        )
+
+    email: str = user_info["email"]
+
+    # --- Find or create the user in PostgreSQL ---
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        # First time this Google account has logged in — create a new user row.
+        # hashed_password is None because OAuth users never set a password with us.
+        user = User(
+            email=email,
+            hashed_password=None,
+            auth_provider=AuthProvider.google,
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)  # reload to get the generated id
+
+    # Reject disabled accounts even for OAuth logins
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is disabled",
+        )
+
+    # --- Issue our own tokens (same as /login) ---
+
+    access_token = create_access_token(subject=user.id)
+
+    raw_refresh = create_refresh_token()
+    refresh_expires = datetime.now(timezone.utc) + timedelta(
+        days=settings.REFRESH_TOKEN_EXPIRE_DAYS
+    )
+
+    db.add(
+        RefreshToken(
+            user_id=user.id,
+            token=raw_refresh,
+            expires_at=refresh_expires,
+        )
+    )
+    await db.commit()
+
+    # Redirect the browser to the frontend callback page with both tokens in the
+    # query string. The frontend reads them from the URL and stores them in memory
+    # or localStorage, then strips them from the URL bar.
+    redirect_url = (
+        f"{settings.FRONTEND_URL}/auth/callback"
+        f"?access_token={access_token}"
+        f"&refresh_token={raw_refresh}"
+    )
+    return RedirectResponse(url=redirect_url)

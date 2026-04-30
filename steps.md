@@ -668,5 +668,151 @@ curl -X POST http://localhost:8000/auth/logout \
 # → {"message": "Logged out successfully"}
 ```
 
+---
+
+## Auth — Google OAuth (GET /auth/google + GET /auth/google/callback)
+
+### What it does
+
+Two endpoints together implement the OAuth 2.0 Authorization Code Flow with Google:
+
+1. `GET /auth/google` — redirects the user's browser to Google's login page
+2. `GET /auth/google/callback` — Google redirects back here after login; the backend exchanges the code for tokens, finds or creates the user in PostgreSQL, issues a JWT + refresh token, and redirects the browser to the frontend
+
+### How the Authorization Code Flow works (step by step)
+
+```
+Browser                  Backend                    Google
+  │                         │                          │
+  │── GET /auth/google ────►│                          │
+  │                         │── redirect to Google ───►│
+  │◄── 302 to accounts.google.com ──────────────────────│
+  │                         │                          │
+  │── [user logs in with Google] ─────────────────────►│
+  │                         │                          │
+  │◄── 302 /auth/google/callback?code=...&state=... ───│
+  │                         │                          │
+  │── GET /callback?code=...►│                          │
+  │                         │── exchange code ────────►│
+  │                         │◄── access_token + id_token│
+  │                         │── decode email from id_token
+  │                         │── find or create user in DB
+  │                         │── issue JWT + refresh token
+  │◄── 302 frontend/auth/callback?access_token=...&refresh_token=...
+```
+
+### Why `state` matters (CSRF protection)
+
+When the user visits `/auth/google`, authlib generates a random `state` string, stores it in the signed session cookie (via `SessionMiddleware`), and includes it in the redirect URL to Google. When Google redirects back, it echoes the same `state`. Authlib compares it to what's in the session — if they don't match, it rejects the callback. This prevents an attacker from tricking a logged-in user into completing someone else's OAuth flow.
+
+### Files created / changed
+
+| File | What changed |
+|---|---|
+| `backend/.env` | Added `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `FRONTEND_URL` |
+| `backend/app/core/config.py` | Added the four corresponding settings fields |
+| `backend/requirements.txt` | Added `authlib>=1.3.0`, `httpx>=0.27.0`, `itsdangerous>=2.0.0` |
+| `backend/app/main.py` | Added `SessionMiddleware` (required by authlib to store OAuth state in a signed cookie) |
+| `backend/app/api/auth.py` | Added `_oauth` client (registered once at module level); added `GET /google` and `GET /google/callback` routes |
+
+### Why these three new packages
+
+| Package | Why needed |
+|---|---|
+| `authlib` | OAuth 2.0 / OpenID Connect client — handles redirect, state, token exchange, id_token parsing |
+| `httpx` | Async HTTP client used internally by authlib to call Google's token and userinfo endpoints |
+| `itsdangerous` | Signs and verifies the session cookie — prevents tampering with the stored `state` value |
+
+### Setting up Google Cloud Console (one-time)
+
+Before this works, the redirect URI must be registered with Google. **This is required — Google will reject callbacks to unregistered URIs.**
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com)
+2. Select your project → **APIs & Services** → **Credentials**
+3. Click on your OAuth 2.0 Client ID
+4. Under **Authorized redirect URIs**, add:
+   ```
+   http://localhost:8000/api/auth/google/callback
+   ```
+5. Under **Authorized JavaScript origins**, add:
+   ```
+   http://localhost:8000
+   http://localhost:3000
+   ```
+6. Click **Save**
+
+> When deploying to production, you must add the production domain here too (e.g. `https://api.yourdomain.com/api/auth/google/callback`).
+
+### Find-or-create user logic
+
+| Scenario | What happens |
+|---|---|
+| New Google account, email not in DB | New `User` row created with `auth_provider=google`, `hashed_password=NULL` |
+| Same email already exists (local account) | Existing user found and returned — Google login works alongside email/password |
+| Account exists but `is_active=False` | `403 Forbidden` — same gate as email/password login |
+
+`hashed_password` is `NULL` for OAuth users — they have no password in our system. If they later try to use `POST /auth/login`, the check `if not user.hashed_password` will return `401` (correct — they must use Google).
+
+### How to verify
+
+**Step 1 — Install new packages** (if running locally outside Docker)
+
+```bash
+cd backend && source venv/bin/activate
+pip install -r requirements.txt
+```
+
+**Step 2 — Restart the backend**
+
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+
+No startup errors means `SessionMiddleware` and `authlib` loaded correctly.
+
+**Step 3 — Trigger the OAuth flow**
+
+Open your browser and navigate directly to:
+```
+http://localhost:8000/api/auth/google
+```
+
+You should be redirected to Google's login page. Sign in with a Google account.
+
+**Step 4 — Verify the callback**
+
+After Google login, the browser should land on:
+```
+http://localhost:3000/auth/callback?access_token=eyJ...&refresh_token=abc...
+```
+
+> The frontend page `/auth/callback` doesn't exist yet — you'll see a Next.js 404. That's expected. The important thing is that the URL contains both tokens, which confirms the OAuth flow completed successfully.
+
+**Step 5 — Confirm the user was created in PostgreSQL**
+
+Open **TablePlus** → `idea_vault_auth` → `users` table. You should see:
+- A new row with your Google email
+- `auth_provider` = `google`
+- `hashed_password` = `NULL`
+- `is_active` = `true`
+
+Also check `refresh_tokens` — a new row should exist for this user.
+
+**Step 6 — Decode the access token**
+
+Paste the `access_token` from the URL into [jwt.io](https://jwt.io). The `sub` claim should match the user's `id` from the `users` table, and `exp` should be ~15 minutes from now.
+
+**Step 7 — Test the token works**
+
+```bash
+# Use the access_token to call a protected endpoint (e.g. logout)
+curl -X POST http://localhost:8000/api/auth/logout \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "YOUR_REFRESH_TOKEN"}'
+# → {"message": "Logged out successfully"}
+```
+
+
 
 
