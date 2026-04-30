@@ -1,0 +1,169 @@
+# ===========================
+# macOS
+# ===========================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.AppleDouble
+.LSOverride
+Icon?
+ehthumbs.db
+Thumbs.db
+
+# ===========================
+# Python / FastAPI Backend
+# ===========================
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+ENV/
+env.bak/
+venv.bak/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+
+# Distribution / packaging
+build/
+dist/
+*.egg
+*.egg-info/
+.eggs/
+wheels/
+*.whl
+MANIFEST
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+
+# MyPy / type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# Ruff / linting
+.ruff_cache/
+
+# IPython / Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Alembic (migrations may be committed intentionally — adjust as needed)
+# alembic/versions/
+
+# ===========================
+# Environment Variables
+# ===========================
+.env
+.env.*
+.env.example
+*.env
+
+# ===========================
+# Node.js / Next.js Frontend
+# ===========================
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# Next.js build output
+.next/
+out/
+
+# Production build
+build/
+
+# Caches
+.cache/
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+next-env.d.ts
+
+# Vercel
+.vercel/
+
+# Turbopack
+.turbo/
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# Package manager lock files (keep only the one you use)
+# Uncomment the ones you don't use:
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# ===========================
+# TypeScript
+# ===========================
+*.js.map
+*.d.ts.map
+
+# ===========================
+# TailwindCSS
+# ===========================
+# (no build artifacts to ignore; config files are committed)
+
+# ===========================
+# IDEs & Editors
+# ===========================
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*.swo
+*~
+
+# ===========================
+# OS / Misc
+# ===========================
+*.pem
+*.key
+*.cert
+*.p12
+.sass-cache/
+tmp/
+temp/
