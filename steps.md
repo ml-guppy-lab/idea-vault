@@ -1410,6 +1410,137 @@ curl -s "http://localhost:8000/api/ideas" -H "Authorization: Bearer notreal"
 4. Open `GET /ideas` → **Try it out** → set `page`, `limit`, `sort_by`, `order` → **Execute**
 5. Response should be `200` with `items`, `total`, `page`, `limit`
 
+---
+
+## Ideas — GET /ideas/{id} (Get Single Idea)
+
+### What it does
+
+Fetches a single idea by its MongoDB `_id`. Requires a valid JWT. Returns the full `IdeaResponse` if found and owned by the caller.
+
+### Security logic (order is intentional)
+
+| Step | Condition | Response |
+|---|---|---|
+| 1 | `idea_id` is not a valid 24-hex ObjectId | `404 Not Found` |
+| 2 | No document found with that `_id` | `404 Not Found` |
+| 3 | Document exists but `userId` ≠ caller's id | `403 Forbidden` |
+| 4 | Document exists and `userId` matches | `200 OK` + idea |
+
+**Why 403 and not 404 when the idea belongs to someone else?**
+
+Returning `404` for cross-user access lets attackers confirm whether an id exists by signing up as two different users and probing the same id — if one gets `404` and the other gets `200`, the id is valid. Returning `403` always for ownership mismatches closes that information leak.
+
+**Why invalid ObjectId format → 404?**
+
+If we returned `422` for a malformed id (e.g. `"abc"`), attackers could distinguish format-valid ids from format-invalid ones. Treating both as `404` gives nothing away.
+
+### Files changed
+
+| File | What changed |
+|---|---|
+| `backend/app/api/ideas.py` | Added `_parse_object_id()` helper and `GET /ideas/{idea_id}` route |
+
+### How to verify
+
+**Step 1 — Get a token and an idea id**
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# Create an idea and capture its id
+IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "My idea"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+echo "Idea ID: $IDEA_ID"
+```
+
+**Step 2 — Fetch the idea by id**
+
+```bash
+curl -s "http://localhost:8000/api/ideas/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+```
+
+Expected `200`:
+```json
+{
+  "id": "664a1b2c3d4e5f6a7b8c9d0e",
+  "userId": "...",
+  "title": "My idea",
+  "description": null,
+  "tags": [],
+  "status": "raw",
+  "priority": "low",
+  "createdAt": "2026-05-03T...",
+  "updatedAt": "2026-05-03T..."
+}
+```
+
+**Step 3 — Test 404 (nonexistent id)**
+
+```bash
+# Valid ObjectId format but doesn't exist in DB
+curl -s "http://localhost:8000/api/ideas/000000000000000000000000" \
+  -H "Authorization: Bearer $TOKEN"
+# → {"detail": "Idea not found"}
+```
+
+**Step 4 — Test 404 (invalid ObjectId format)**
+
+```bash
+curl -s "http://localhost:8000/api/ideas/not-an-id" \
+  -H "Authorization: Bearer $TOKEN"
+# → {"detail": "Idea not found"}
+# Same 404 — format information is not leaked
+```
+
+**Step 5 — Test 403 (idea belongs to another user)**
+
+```bash
+# Register a second user
+curl -s -X POST http://localhost:8000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "other@example.com", "password": "Other1234"}'
+
+# Log in as the second user
+TOKEN2=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "other@example.com", "password": "Other1234"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# Try to access the first user's idea using the second user's token
+curl -s "http://localhost:8000/api/ideas/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN2"
+# → 403 {"detail": "You do not have permission to access this idea"}
+```
+
+**Step 6 — Test auth protection**
+
+```bash
+# No token — 403
+curl -s "http://localhost:8000/api/ideas/$IDEA_ID"
+
+# Expired/invalid JWT — 401
+curl -s "http://localhost:8000/api/ideas/$IDEA_ID" \
+  -H "Authorization: Bearer notreal"
+```
+
+**Step 7 — Verify via Swagger UI**
+
+1. Open **http://localhost:8000/docs**
+2. Authorize with a valid access token
+3. Open `GET /ideas/{idea_id}` → **Try it out** → paste a real idea id → **Execute**
+4. Expected `200` with the full idea document
+
+
 
 
 

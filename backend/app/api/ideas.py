@@ -219,3 +219,78 @@ async def list_ideas(
         limit=limit,
     )
 
+
+def _parse_object_id(idea_id: str) -> ObjectId:
+    """
+    Safely convert a string to a BSON ObjectId.
+
+    MongoDB's ObjectId has a specific 24-hex-character format. If the caller
+    passes a string that doesn't match (e.g. "abc" or a UUID), bson raises
+    InvalidId. We catch that and raise a clean 404 so the caller gets the
+    same response as for a valid-but-nonexistent id — preventing format-based
+    information leakage.
+    """
+    try:
+        return ObjectId(idea_id)
+    except Exception:
+        # Treat an unparseable id the same as a genuinely missing document.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Idea not found",
+        )
+
+
+@router.get(
+    "/{idea_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=IdeaResponse,
+    summary="Get a single idea by ID",
+)
+async def get_idea(
+    idea_id: str,
+    current_user: User = Depends(get_current_user),    # JWT auth gate
+    db: AsyncIOMotorDatabase = Depends(get_mongo_db),  # Motor DB dependency
+) -> IdeaResponse:
+    """
+    Fetch a single idea by its MongoDB _id.
+
+    Security rules (order matters):
+    1. If `idea_id` is not a valid ObjectId format → 404 (no format leakage)
+    2. If no document with that _id exists → 404
+    3. If the document exists but belongs to a different user → 403 Forbidden
+       (NOT 404 — returning 404 would let attackers confirm an id exists by
+        toggling between 403 and 404 for different users)
+    4. If the document belongs to the current user → 200 with the idea
+
+    This order ensures that an attacker who guesses another user's idea id
+    always gets 403, never any confirmation the id is valid.
+    """
+
+    # --- convert string id → ObjectId (raises 404 if format is wrong) ---
+    oid = _parse_object_id(idea_id)
+
+    # --- fetch the document from MongoDB by its primary key ---
+    doc = await db.ideas.find_one({"_id": oid})
+
+    # --- 404 if the idea doesn't exist at all ---
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Idea not found",
+        )
+
+    # --- 403 if the idea exists but belongs to someone else ---
+    # This check MUST come after the existence check so we return 403
+    # (not 404) for cross-user access attempts on real documents.
+    # 403 is intentional: it tells the caller "you're authenticated but
+    # not allowed", which is more accurate than pretending the resource
+    # doesn't exist — and it prevents ID-enumeration via 404 vs 403 diff.
+    if doc["userId"] != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to access this idea",
+        )
+
+    # --- convert ObjectId → string and return ---
+    return IdeaResponse(**_serialize_idea(doc))
+
