@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from enum import Enum
 from datetime import datetime, timezone
@@ -29,6 +29,30 @@ class IdeaCreate(BaseModel):
     tags: Optional[list[str]] = Field(default=[])
     status: Optional[IdeaStatus] = Field(default=IdeaStatus.raw)
     priority: Optional[IdeaPriority] = Field(default=IdeaPriority.low)
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, tags: list[str]) -> list[str]:
+        """
+        Each tag must be a non-empty string, max 50 chars, no duplicates.
+        Tags are stripped of surrounding whitespace before validation.
+        """
+        if tags is None:
+            return []
+        cleaned = []
+        seen = set()
+        for tag in tags:
+            tag = tag.strip()
+            if not tag:
+                raise ValueError("Tags must not be empty strings")
+            if len(tag) > 50:
+                raise ValueError(f"Tag '{tag}' exceeds 50 characters")
+            lower = tag.lower()
+            if lower in seen:
+                raise ValueError(f"Duplicate tag: '{tag}'")
+            seen.add(lower)
+            cleaned.append(tag)
+        return cleaned
 
 
 # --- Request Schema (what the user sends when UPDATING an idea) ---
@@ -75,3 +99,13 @@ class IdeaInDB(BaseModel):
     updatedAt: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+
+
+# --- Paginated list response (what GET /ideas returns) ---
+# Wraps a page of IdeaResponse items with pagination metadata.
+
+class IdeaListResponse(BaseModel):
+    items: list[IdeaResponse]   # the ideas on this page
+    total: int                  # total matching documents in MongoDB (across all pages)
+    page: int                   # current page number (1-based)
+    limit: int                  # max items per page

@@ -1,3 +1,23 @@
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# To test one api - logout 
+
+# Step 1 — Log in now to get a fresh token
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "test1@example.com", "password": "112233"}' | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['access_token'], r['refresh_token'])")
+
+ACCESS=$(echo $TOKEN | awk '{print $1}')
+REFRESH=$(echo $TOKEN | awk '{print $2}')
+
+# Step 2 — Use the fresh token immediately
+curl -s -X POST http://localhost:8000/api/auth/logout \
+  -H "Authorization: Bearer $ACCESS" \
+  -H "Content-Type: application/json" \
+  -d "{\"refresh_token\": \"$REFRESH\"}"
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
 # Project Setup Steps
 
 > All features must be done in `feature/feature-name` branches that merge into `dev`. Never commit directly to `main`.
@@ -956,6 +976,819 @@ KEYS ratelimit:*
 # → 1) "ratelimit:login:127.0.0.1"
 # → 2) "ratelimit:register:127.0.0.1"
 ```
+
+---
+
+## Auth — `get_current_user` Dependency (app/core/security.py)
+
+### What it does
+
+`get_current_user` is a reusable FastAPI dependency that protects any route. Add it to a route's parameters and that route automatically requires a valid JWT. It reads the `Authorization: Bearer` header, verifies the JWT signature, decodes the user ID, fetches the full `User` row from PostgreSQL, and returns it. If anything fails, the route is never reached — FastAPI returns the error automatically.
+
+### Usage in any route
+
+```python
+from app.core.security import get_current_user
+from app.models.user import User
+
+@router.get("/me")
+async def me(current_user: User = Depends(get_current_user)):
+    return {"id": current_user.id, "email": current_user.email}
+```
+
+That's all that's needed. FastAPI discovers the dependency, runs it before the route handler, and either injects the `User` object or short-circuits with an error.
+
+### What it checks (in order)
+
+| Check | Failure response |
+|---|---|
+| `Authorization: Bearer` header is present | `403 Forbidden` (HTTPBearer handles this automatically) |
+| JWT signature is valid and not expired | `401 Unauthorized` — `"Invalid or expired access token"` |
+| User ID from token exists in PostgreSQL | `401 Unauthorized` — same generic message (prevents leaking account info) |
+| `user.is_active == True` | `403 Forbidden` — `"Account is disabled"` |
+
+### Why 401 for "user not found"
+
+If a user is deleted from the database after their token was issued, the token is still cryptographically valid — but the user no longer exists. Returning `401` (not `404`) is intentional: we never confirm whether the email/ID exists to prevent information leakage.
+
+### Why the User model is imported inside the function body
+
+`security.py` importing `models/user.py` at the module level would create a circular import:
+
+```
+security.py → models/user.py → db/postgres.py → (config) ✓
+```
+
+This is actually fine. But importing `User` at the top of `security.py` would work — the local import inside the function body is used as a precaution to make the module easy to restructure in the future without risk of cycles.
+
+### Files created / changed
+
+| File | What changed |
+|---|---|
+| `backend/app/core/security.py` | Added `_bearer = HTTPBearer()` and `get_current_user` async dependency |
+| `backend/app/api/auth.py` | Removed local `_bearer` and `get_current_user_id`; imported `get_current_user` from security; updated `POST /logout` to use `current_user: User = Depends(get_current_user)` |
+
+### How to verify
+
+**Step 1 — Restart the backend**
+
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+
+**Step 2 — Call a protected endpoint without a token**
+
+```bash
+curl -s http://localhost:8000/api/auth/logout \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "anything"}'
+# → 403 {"detail": "Not authenticated"}
+# HTTPBearer returns 403 when the Authorization header is entirely missing
+```
+
+**Step 3 — Call with an invalid token**
+
+```bash
+curl -s http://localhost:8000/api/auth/logout \
+  -X POST \
+  -H "Authorization: Bearer not-a-real-jwt" \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "anything"}'
+# → 401 {"detail": "Invalid or expired access token"}
+```
+
+**Step 4 — Call with a valid token**
+
+```bash
+# First, log in to get a token
+curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}'
+# Copy access_token and refresh_token from the response
+
+# Then call logout with the real token
+curl -s -X POST http://localhost:8000/api/auth/logout \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "YOUR_REFRESH_TOKEN"}'
+# → 200 {"message": "Logged out successfully"}
+```
+
+**Step 5 — Add it to a new route (example)**
+
+Any future route that needs authentication just adds one parameter:
+
+```python
+from app.core.security import get_current_user
+from app.models.user import User
+
+@router.get("/ideas")
+async def list_ideas(current_user: User = Depends(get_current_user)):
+    # current_user is the authenticated User row — guaranteed valid by this point
+    ...
+```
+
+No additional code is needed — FastAPI handles the entire auth flow automatically.
+
+---
+
+## Ideas — POST /ideas/create (Create Idea)
+
+### What it does
+
+Creates a new idea document in MongoDB. Requires a valid JWT — the `userId` on every idea is taken from the token, not from the request body, so it can never be spoofed. Returns `201 Created` with the full saved document including the MongoDB-generated `_id` as `id`.
+
+### Fields
+
+| Field | Required | Type | Default | Validation |
+|---|---|---|---|---|
+| `title` | ✅ | string | — | 1–200 characters |
+| `description` | ❌ | string | `null` | max 5000 characters |
+| `tags` | ❌ | array of strings | `[]` | each tag: non-empty, max 50 chars, no duplicates |
+| `status` | ❌ | enum | `raw` | `raw`, `exploring`, `validated`, `building`, `shipped`, `abandoned` |
+| `priority` | ❌ | enum | `low` | `low`, `medium`, `high` |
+
+Server-controlled (never sent by client):
+
+| Field | Set by |
+|---|---|
+| `userId` | Decoded from JWT — the authenticated user's id |
+| `createdAt` | Server UTC timestamp at insert time |
+| `updatedAt` | Same as `createdAt` on creation |
+| `_id` (→ `id`) | MongoDB auto-generated ObjectId, returned as string |
+
+### Files created / changed
+
+| File | What changed |
+|---|---|
+| `backend/app/schemas/idea.py` | Added `@field_validator("tags")` — strips whitespace, rejects empty/long/duplicate tags |
+| `backend/app/api/ideas.py` | Full implementation — replaced TODO placeholder with `POST /ideas/create` route + `_serialize_idea` helper |
+
+### How it works
+
+1. `get_current_user` runs first — validates JWT, fetches `User` from PostgreSQL, returns it or raises `401`/`403`
+2. Pydantic validates `IdeaCreate` — rejects bad input with `422` before the route body runs
+3. A UTC timestamp is captured once (`now`) and used for both `createdAt` and `updatedAt`
+4. The document is assembled by spreading `payload.model_dump()` + injecting `userId`, `createdAt`, `updatedAt`
+5. `db.ideas.insert_one(document)` writes to MongoDB — Motor returns the generated `_id`
+6. `db.ideas.find_one({"_id": result.inserted_id})` fetches the saved document back (ensures we return exactly what was stored)
+7. `_serialize_idea()` converts the BSON `ObjectId` → plain string so `IdeaResponse(alias="_id")` maps it to `id`
+8. Returns `201` with the full `IdeaResponse`
+
+### Why fetch back after insert?
+
+`insert_one` only returns the `_id`. Reconstructing the document in Python would risk drift if MongoDB applies any transforms. Fetching back guarantees the response matches exactly what's in the database.
+
+### Why `userId` comes from the JWT, not the request body
+
+If the client sent `userId`, any authenticated user could create ideas for any other user by passing someone else's id. Taking it from the verified token eliminates the attack surface entirely.
+
+### How to verify
+
+**Step 1 — Restart the backend**
+
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+
+**Step 2 — Log in to get a token**
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}' \
+  | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['access_token'])")
+```
+
+**Step 3 — Create an idea (minimal)**
+
+```bash
+curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "My first idea"}' | python3 -m json.tool
+```
+
+Expected `201`:
+```json
+{
+  "id": "664a1b2c3d4e5f6a7b8c9d0e",
+  "userId": "90a804a9-0700-4f87e3-...",
+  "title": "My first idea",
+  "description": null,
+  "tags": [],
+  "status": "raw",
+  "priority": "low",
+  "createdAt": "2026-05-03T12:00:00.000Z",
+  "updatedAt": "2026-05-03T12:00:00.000Z"
+}
+```
+
+**Step 4 — Create an idea (all fields)**
+
+```bash
+curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "AI-powered journal",
+    "description": "An app that summarises your daily notes using GPT",
+    "tags": ["AI", "productivity", "SaaS"],
+    "status": "exploring",
+    "priority": "high"
+  }' | python3 -m json.tool
+```
+
+**Step 5 — Test validation errors**
+
+```bash
+# Missing title — 422
+curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"description": "no title here"}'
+
+# Title too long — 422
+curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"title\": \"$(python3 -c 'print("x"*201)')\"}"
+
+# Duplicate tags — 422
+curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Test", "tags": ["AI", "ai"]}'
+
+# Invalid status enum — 422
+curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Test", "status": "notastatus"}'
+
+# No Authorization header — 403
+curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Test"}'
+
+# Invalid JWT — 401
+curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer notajwt" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Test"}'
+```
+
+**Step 6 — Confirm in MongoDB Compass**
+
+1. Open **MongoDB Compass** → connect
+2. Go to `idea_vault` → `ideas` collection
+3. You should see the documents created above, each with `userId` matching your user's PostgreSQL `id`
+
+**Step 7 — Verify via Swagger UI**
+
+1. Open **http://localhost:8000/docs**
+2. Log in via `POST /auth/login` → copy `access_token`
+3. Click **Authorize** → paste the token
+4. Open `POST /ideas/create` → **Try it out** → enter a body → **Execute**
+5. Response should be `201` with the full idea document
+
+---
+
+## Ideas — GET /ideas/list (List Ideas — Paginated)
+
+### What it does
+
+Returns the authenticated user's ideas from MongoDB as a paginated, sorted list. Only ideas where `userId` matches the JWT are returned — users can never see each other's ideas. Supports `page`, `limit`, `sort_by`, and `order` query parameters.
+
+### Query parameters
+
+| Param | Type | Default | Allowed values | Notes |
+|---|---|---|---|---|
+| `page` | int | `1` | ≥ 1 | 1-based page number |
+| `limit` | int | `10` | 1–100 | items per page |
+| `sort_by` | string | `createdAt` | `createdAt`, `updatedAt`, `priority` | field to sort by |
+| `order` | string | `desc` | `asc`, `desc` | sort direction |
+
+### Response shape
+
+```json
+{
+  "items": [ ...IdeaResponse objects... ],
+  "total": 42,
+  "page": 1,
+  "limit": 10
+}
+```
+
+`total` is the count of all matching ideas (not just this page) — the frontend uses it to calculate total page count.
+
+### Files created / changed
+
+| File | What changed |
+|---|---|
+| `backend/app/schemas/idea.py` | Added `IdeaListResponse` — wraps `items`, `total`, `page`, `limit` |
+| `backend/app/api/ideas.py` | Added `GET /ideas/list` route with pagination, sorting, and priority weight fix |
+
+### How priority sorting works
+
+`priority` is a string enum (`low`, `medium`, `high`). Sorting alphabetically gives the wrong order (`high < low < medium`). Instead, a MongoDB aggregation pipeline adds a temporary `_priorityWeight` field (`low=1`, `medium=2`, `high=3`), sorts by that number, then removes the field before returning. Result: `asc` = low → medium → high, `desc` = high → medium → low.
+
+For `createdAt` and `updatedAt`, a simpler `find().sort().skip().limit()` is used — no pipeline needed.
+
+### How to verify
+
+**Step 1 — Restart the backend and get a token**
+
+```bash
+uvicorn app.main:app --reload --port 8000
+
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+```
+
+**Step 2 — Create a few test ideas (so there's data to page through)**
+
+```bash
+for title in "Idea One" "Idea Two" "Idea Three" "Idea Four" "Idea Five"; do
+  curl -s -X POST http://localhost:8000/api/ideas/create \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"title\": \"$title\", \"priority\": \"high\"}" > /dev/null
+done
+```
+
+**Step 3 — List all ideas (defaults: page=1, limit=10, sort_by=createdAt, order=desc)**
+
+```bash
+curl -s "http://localhost:8000/api/ideas/list" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+```
+
+Expected response shape:
+```json
+{
+  "items": [ ... ],
+  "total": 5,
+  "page": 1,
+  "limit": 10
+}
+```
+
+**Step 4 — Test pagination**
+
+```bash
+# Page 1 — first 2 ideas
+curl -s "http://localhost:8000/api/ideas/list?page=1&limit=2" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+
+# Page 2 — next 2 ideas
+curl -s "http://localhost:8000/api/ideas/list?page=2&limit=2" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+
+# Page 3 — last 1 idea (if total=5)
+curl -s "http://localhost:8000/api/ideas/list?page=3&limit=2" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+```
+
+**Step 5 — Test sorting**
+
+```bash
+# Oldest first
+curl -s "http://localhost:8000/api/ideas/list?sort_by=createdAt&order=asc" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; items=json.load(sys.stdin)['items']; [print(i['title'], i['createdAt']) for i in items]"
+
+# By priority — high first
+curl -s "http://localhost:8000/api/ideas/list?sort_by=priority&order=desc" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; items=json.load(sys.stdin)['items']; [print(i['title'], i['priority']) for i in items]"
+
+# By priority — low first
+curl -s "http://localhost:8000/api/ideas/list?sort_by=priority&order=asc" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; items=json.load(sys.stdin)['items']; [print(i['title'], i['priority']) for i in items]"
+```
+
+**Step 6 — Test invalid params (should return 400)**
+
+```bash
+# Invalid sort_by — 400
+curl -s "http://localhost:8000/api/ideas/list?sort_by=email" \
+  -H "Authorization: Bearer $TOKEN"
+# → {"detail": "Invalid sort_by 'email'. Must be one of: createdAt, priority, updatedAt"}
+
+# Invalid order — 400
+curl -s "http://localhost:8000/api/ideas/list?order=random" \
+  -H "Authorization: Bearer $TOKEN"
+# → {"detail": "Invalid order. Must be 'asc' or 'desc'"}
+```
+
+**Step 7 — Test auth protection**
+
+```bash
+# No token — 403
+curl -s "http://localhost:8000/api/ideas/list"
+# → {"detail": "Not authenticated"}
+
+# Invalid JWT — 401
+curl -s "http://localhost:8000/api/ideas/list" -H "Authorization: Bearer notreal"
+# → {"detail": "Invalid or expired access token"}
+```
+
+**Step 8 — Verify via Swagger UI**
+
+1. Open **http://localhost:8000/docs**
+2. Log in via `POST /auth/login` → copy `access_token`
+3. Click **Authorize** → paste the token
+4. Open `GET /ideas/list` → **Try it out** → set `page`, `limit`, `sort_by`, `order` → **Execute**
+5. Response should be `200` with `items`, `total`, `page`, `limit`
+
+---
+
+## Ideas — GET /ideas/get/{id} (Get Single Idea)
+
+### What it does
+
+Fetches a single idea by its MongoDB `_id`. Requires a valid JWT. Returns the full `IdeaResponse` if found and owned by the caller.
+
+### Security logic (order is intentional)
+
+| Step | Condition | Response |
+|---|---|---|
+| 1 | `idea_id` is not a valid 24-hex ObjectId | `404 Not Found` |
+| 2 | No document found with that `_id` | `404 Not Found` |
+| 3 | Document exists but `userId` ≠ caller's id | `403 Forbidden` |
+| 4 | Document exists and `userId` matches | `200 OK` + idea |
+
+**Why 403 and not 404 when the idea belongs to someone else?**
+
+Returning `404` for cross-user access lets attackers confirm whether an id exists by signing up as two different users and probing the same id — if one gets `404` and the other gets `200`, the id is valid. Returning `403` always for ownership mismatches closes that information leak.
+
+**Why invalid ObjectId format → 404?**
+
+If we returned `422` for a malformed id (e.g. `"abc"`), attackers could distinguish format-valid ids from format-invalid ones. Treating both as `404` gives nothing away.
+
+### Files changed
+
+| File | What changed |
+|---|---|
+| `backend/app/api/ideas.py` | Added `_parse_object_id()` helper and `GET /ideas/get/{idea_id}` route |
+
+### How to verify
+
+**Step 1 — Get a token and an idea id**
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# Create an idea and capture its id
+IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "My idea"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+echo "Idea ID: $IDEA_ID"
+```
+
+**Step 2 — Fetch the idea by id**
+
+```bash
+curl -s "http://localhost:8000/api/ideas/get/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+```
+
+Expected `200`:
+```json
+{
+  "id": "664a1b2c3d4e5f6a7b8c9d0e",
+  "userId": "...",
+  "title": "My idea",
+  "description": null,
+  "tags": [],
+  "status": "raw",
+  "priority": "low",
+  "createdAt": "2026-05-03T...",
+  "updatedAt": "2026-05-03T..."
+}
+```
+
+**Step 3 — Test 404 (nonexistent id)**
+
+```bash
+# Valid ObjectId format but doesn't exist in DB
+curl -s "http://localhost:8000/api/ideas/000000000000000000000000" \
+  -H "Authorization: Bearer $TOKEN"
+# → {"detail": "Idea not found"}
+```
+
+**Step 4 — Test 404 (invalid ObjectId format)**
+
+```bash
+curl -s "http://localhost:8000/api/ideas/not-an-id" \
+  -H "Authorization: Bearer $TOKEN"
+# → {"detail": "Idea not found"}
+# Same 404 — format information is not leaked
+```
+
+**Step 5 — Test 403 (idea belongs to another user)**
+
+```bash
+# Register a second user
+curl -s -X POST http://localhost:8000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "other@example.com", "password": "Other1234"}'
+
+# Log in as the second user
+TOKEN2=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "other@example.com", "password": "Other1234"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# Try to access the first user's idea using the second user's token
+curl -s "http://localhost:8000/api/ideas/get/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN2"
+# → 403 {"detail": "You do not have permission to access this idea"}
+```
+
+**Step 6 — Test auth protection**
+
+```bash
+# No token — 403
+curl -s "http://localhost:8000/api/ideas/get/$IDEA_ID"
+
+# Expired/invalid JWT — 401
+curl -s "http://localhost:8000/api/ideas/get/$IDEA_ID" \
+  -H "Authorization: Bearer notreal"
+```
+
+**Step 7 — Verify via Swagger UI**
+
+1. Open **http://localhost:8000/docs**
+2. Authorize with a valid access token
+3. Open `GET /ideas/get/{idea_id}` → **Try it out** → paste a real idea id → **Execute**
+4. Expected `200` with the full idea document
+
+---
+
+## Ideas — PUT /ideas/update/{id} (Update Idea)
+
+### What it does
+
+Partially updates an idea owned by the authenticated user. Only fields explicitly included in the request body are modified — omitted fields are left unchanged in MongoDB. Always stamps `updatedAt` with the current UTC time on every successful update. Returns the full updated document.
+
+### Key design decisions
+
+**Why partial update (not full replace)?**
+The client might only want to change `status` from `raw` → `exploring`. Requiring the entire document forces the client to re-send all fields, risking accidental overwrites. `model_dump(exclude_unset=True)` captures only what was sent, and MongoDB's `$set` writes only those fields — the rest are untouched.
+
+**Why always update `updatedAt`?**
+Timestamps track when a document was last touched, not just when payload fields changed. If the same title is sent twice, `updatedAt` still advances — consistent with standard REST conventions.
+
+**Why re-fetch after update instead of merging in Python?**
+The response must reflect exactly what's in MongoDB. Building the response locally by merging old + new fields risks subtle drift. Re-fetching guarantees consistency.
+
+**Ownership check: 403, not 404**
+Same rule as `GET /ideas/get/{id}` — see that section for the full rationale.
+
+### All fields are optional in the request body
+
+| Field | Type | Notes |
+|---|---|---|
+| `title` | string | 1–200 chars if provided |
+| `description` | string or null | max 5000 chars |
+| `tags` | array of strings | same validation as POST |
+| `status` | enum | `raw`, `exploring`, `validated`, `building`, `shipped`, `abandoned` |
+| `priority` | enum | `low`, `medium`, `high` |
+
+### Files changed
+
+| File | What changed |
+|---|---|
+| `backend/app/api/ideas.py` | Added `IdeaUpdate` to imports; added `PUT /ideas/update/{idea_id}` route |
+
+### How to verify
+
+**Step 1 — Get a token and create an idea**
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Original title", "status": "raw", "priority": "low"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+echo "Idea ID: $IDEA_ID"
+```
+
+**Step 2 — Update a single field only**
+
+```bash
+curl -s -X PUT "http://localhost:8000/api/ideas/update/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "exploring"}' \
+  | python3 -m json.tool
+# → status is now "exploring", all other fields unchanged, updatedAt advanced
+```
+
+**Step 3 — Update multiple fields at once**
+
+```bash
+curl -s -X PUT "http://localhost:8000/api/ideas/update/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Updated title",
+    "priority": "high",
+    "tags": ["AI", "SaaS"]
+  }' \
+  | python3 -m json.tool
+```
+
+**Step 4 — Confirm `updatedAt` advanced but `createdAt` is unchanged**
+
+```bash
+curl -s "http://localhost:8000/api/ideas/get/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print('created:', d['createdAt']); print('updated:', d['updatedAt'])"
+# createdAt and updatedAt should differ
+```
+
+**Step 5 — Test 404 (nonexistent id)**
+
+```bash
+curl -s -X PUT "http://localhost:8000/api/ideas/000000000000000000000000" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Ghost"}' 
+# → {"detail": "Idea not found"}
+```
+
+**Step 6 — Test 403 (idea belongs to another user)**
+
+```bash
+# Log in as a different user (must already exist)
+TOKEN2=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "other@example.com", "password": "Other1234"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+curl -s -X PUT "http://localhost:8000/api/ideas/update/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN2" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Hijacked"}' 
+# → 403 {"detail": "You do not have permission to update this idea"}
+```
+
+**Step 7 — Test validation errors (422)**
+
+```bash
+# Invalid status value
+curl -s -X PUT "http://localhost:8000/api/ideas/update/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "notvalid"}'
+
+# Title too long
+curl -s -X PUT "http://localhost:8000/api/ideas/update/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"title\": \"$(python3 -c 'print(\"x\"*201)')\"}"
+```
+
+**Step 8 — Verify via Swagger UI**
+
+1. Open **http://localhost:8000/docs**
+2. Authorize with your access token
+3. Open `PUT /ideas/update/{idea_id}` → **Try it out**
+4. Paste the idea id and a partial body (e.g. `{"priority": "high"}`)
+5. Expected `200` with the full updated idea document
+
+---
+
+## Ideas — DELETE /ideas/delete/{id} (Delete Idea)
+
+### What it does
+
+Permanently deletes an idea owned by the authenticated user. Returns `204 No Content` on success with no response body. Returns `404` if the idea does not exist (or the id is malformed), and `403` if the idea exists but belongs to a different user.
+
+### Key design decisions
+
+**Why fetch before delete?**
+`delete_one` only tells you how many documents were deleted (`deleted_count`). If that count is 0, it could mean either "not found" or "wrong owner" — you can't distinguish the two. Fetching first lets us check existence (404) and ownership (403) separately, giving the client accurate error information.
+
+**Why 403 instead of 404 when the idea belongs to someone else?**
+Same rule as `GET /ideas/get/{id}` and `PUT /ideas/update/{id}` — the authenticated user can tell the resource exists but they are not allowed to touch it. Hiding it as 404 is more secure but inconsistent with the rest of the API design here.
+
+**Why `Response(status_code=204)` instead of returning `None`?**
+FastAPI skips body serialisation when you explicitly return a `Response` object. Returning `None` could cause FastAPI to try serialising `null` or leave an ambiguous response depending on the declared `response_model`. Explicit is safer.
+
+### Files changed
+
+| File | What changed |
+|---|---|
+| `backend/app/api/ideas.py` | Added `Response` to FastAPI imports; added `DELETE /ideas/delete/{idea_id}` route |
+
+### How to verify
+
+**Step 1 — Create an idea to delete**
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "To be deleted", "priority": "low"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+echo "Idea ID: $IDEA_ID"
+```
+
+**Step 2 — Delete the idea (expect 204)**
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" \
+  -X DELETE "http://localhost:8000/api/ideas/delete/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN"
+# → 204
+```
+
+**Step 3 — Confirm it's gone (expect 404)**
+
+```bash
+curl -s -X GET "http://localhost:8000/api/ideas/get/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN"
+# → {"detail": "Idea not found"}
+```
+
+**Step 4 — Test 404 with a nonexistent id**
+
+```bash
+curl -s -X DELETE "http://localhost:8000/api/ideas/000000000000000000000000" \
+  -H "Authorization: Bearer $TOKEN"
+# → {"detail": "Idea not found"}
+```
+
+**Step 5 — Test 403 (idea belongs to another user)**
+
+```bash
+# Create an idea with user 1, then try to delete it with user 2
+TOKEN2=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "other@example.com", "password": "Other1234"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "User 1 idea"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+curl -s -X DELETE "http://localhost:8000/api/ideas/delete/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN2"
+# → 403 {"detail": "You do not have permission to delete this idea"}
+```
+
+**Step 6 — Test 401 (no token)**
+
+```bash
+curl -s -X DELETE "http://localhost:8000/api/ideas/delete/$IDEA_ID"
+# → 403 {"detail": "Not authenticated"}
+```
+
+**Step 7 — Verify via Swagger UI**
+
+1. Open **http://localhost:8000/docs**
+2. Authorize with your access token
+3. Open `DELETE /ideas/delete/{idea_id}` → **Try it out**
+4. Paste a valid idea id owned by you
+5. Expected `204` with an empty response body
+
+
+
+
+
 
 
 
