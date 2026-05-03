@@ -1412,6 +1412,187 @@ curl -s "http://localhost:8000/api/ideas/list" -H "Authorization: Bearer notreal
 
 ---
 
+## Ideas — GET /ideas/search (Search Ideas)
+
+### What it does
+
+Searches the authenticated user's ideas for a keyword across both `title` and `description`. The search is case-insensitive and matches partial strings — "ai" will match "Building an AI tool". Returns results as a paginated list, newest first. Only the logged-in user's ideas are searched.
+
+### Query parameters
+
+| Param | Required | Type | Default | Notes |
+|---|---|---|---|---|
+| `q` | ✅ | string | — | 1–200 chars; matched against title and description |
+| `page` | ❌ | int | `1` | 1-based page number |
+| `limit` | ❌ | int | `10` | 1–100 items per page |
+
+### Response shape
+
+Same as `GET /ideas/list`:
+```json
+{
+  "items": [ ...IdeaResponse objects... ],
+  "total": 3,
+  "page": 1,
+  "limit": 10
+}
+```
+
+`total` reflects the number of ideas that matched the query (not just this page).
+
+### Key design decisions
+
+**Why `$regex` and not MongoDB Atlas full-text search?**
+`$regex` works with any MongoDB deployment (including the self-hosted Docker container used here) with no extra configuration. Atlas search requires a managed Atlas cluster and index setup. For a personal idea vault with a relatively small dataset, `$regex` with the `i` option is fast enough and simpler to operate.
+
+**Why `re.escape()` on the user's query?**
+MongoDB's `$regex` accepts raw regex patterns. Without escaping, a user could send `q=.+` or `q=(` and either get unexpected matches or trigger a server error. `re.escape()` converts every special character to a literal, so `"(AI)"` becomes `"\(AI\)"` — a safe substring search, nothing more.
+
+**Why search title AND description (not tags)?**
+Title and description are free-text fields where users write natural language. Tags are short controlled labels — a dedicated `tags` filter (e.g. `?tag=AI`) is a better UX for that use case. Mixing them into the keyword search would produce confusing results.
+
+**Why sort newest first and not expose `sort_by`?**
+Search results are most useful when the most recently created ideas appear first — the user is likely looking for something they worked on recently. A `sort_by` parameter can be added later if needed.
+
+### Files changed
+
+| File | What changed |
+|---|---|
+| `backend/app/api/ideas.py` | Added `import re`; added `GET /ideas/search` route |
+
+### How to verify
+
+**Step 1 — Get a token and create some test ideas**
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# Create ideas with different titles and descriptions
+curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "AI-powered journal", "description": "Summarise daily notes using GPT", "tags": ["AI"]}' > /dev/null
+
+curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Workout tracker", "description": "Track your gym sessions and progress", "tags": ["health"]}' > /dev/null
+
+curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Recipe manager", "description": "AI-assisted meal planning and grocery lists", "tags": ["AI", "food"]}' > /dev/null
+```
+
+**Step 2 — Search by keyword in title**
+
+```bash
+curl -s "http://localhost:8000/api/ideas/search?q=AI" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+# → returns "AI-powered journal" (title match)
+```
+
+**Step 3 — Search by keyword in description**
+
+```bash
+curl -s "http://localhost:8000/api/ideas/search?q=meal" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+# → returns "Recipe manager" (description match)
+```
+
+**Step 4 — Confirm case-insensitivity**
+
+```bash
+# "ai" (lowercase) should match the same ideas as "AI"
+curl -s "http://localhost:8000/api/ideas/search?q=ai" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['total'], 'results')"
+
+curl -s "http://localhost:8000/api/ideas/search?q=AI" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['total'], 'results')"
+# → both should print the same total
+```
+
+**Step 5 — Confirm partial match**
+
+```bash
+# "track" should match "Workout tracker"
+curl -s "http://localhost:8000/api/ideas/search?q=track" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; [print(i['title']) for i in json.load(sys.stdin)['items']]"
+# → Workout tracker
+```
+
+**Step 6 — Test no results**
+
+```bash
+curl -s "http://localhost:8000/api/ideas/search?q=blockchain" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+# → {"items": [], "total": 0, "page": 1, "limit": 10}
+```
+
+**Step 7 — Test pagination**
+
+```bash
+# Assumes you have several ideas matching "idea"
+curl -s "http://localhost:8000/api/ideas/search?q=idea&page=1&limit=2" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+
+curl -s "http://localhost:8000/api/ideas/search?q=idea&page=2&limit=2" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+```
+
+**Step 8 — Test validation errors**
+
+```bash
+# Missing q — 422
+curl -s "http://localhost:8000/api/ideas/search" \
+  -H "Authorization: Bearer $TOKEN"
+# → 422 {"detail": [{"msg": "Field required", ...}]}
+
+# Empty q — 422 (min_length=1)
+curl -s "http://localhost:8000/api/ideas/search?q=" \
+  -H "Authorization: Bearer $TOKEN"
+# → 422
+
+# q too long — 422 (max_length=200)
+curl -s "http://localhost:8000/api/ideas/search?q=$(python3 -c 'print(\"x\"*201)')" \
+  -H "Authorization: Bearer $TOKEN"
+# → 422
+```
+
+**Step 9 — Test auth protection**
+
+```bash
+# No token — 403
+curl -s "http://localhost:8000/api/ideas/search?q=AI"
+# → {"detail": "Not authenticated"}
+
+# Invalid JWT — 401
+curl -s "http://localhost:8000/api/ideas/search?q=AI" \
+  -H "Authorization: Bearer notreal"
+# → {"detail": "Invalid or expired access token"}
+```
+
+**Step 10 — Verify via Swagger UI**
+
+1. Open **http://localhost:8000/docs**
+2. Authorize with your access token
+3. Open `GET /ideas/search` → **Try it out**
+4. Enter a keyword in the `q` field → **Execute**
+5. Expected `200` with `items`, `total`, `page`, `limit`
+
+---
+
 ## Ideas — GET /ideas/get/{id} (Get Single Idea)
 
 ### What it does
