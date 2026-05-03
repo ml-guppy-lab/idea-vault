@@ -1093,7 +1093,7 @@ No additional code is needed — FastAPI handles the entire auth flow automatica
 
 ---
 
-## Ideas — POST /ideas (Create Idea)
+## Ideas — POST /ideas/create (Create Idea)
 
 ### What it does
 
@@ -1123,7 +1123,7 @@ Server-controlled (never sent by client):
 | File | What changed |
 |---|---|
 | `backend/app/schemas/idea.py` | Added `@field_validator("tags")` — strips whitespace, rejects empty/long/duplicate tags |
-| `backend/app/api/ideas.py` | Full implementation — replaced TODO placeholder with `POST /ideas` route + `_serialize_idea` helper |
+| `backend/app/api/ideas.py` | Full implementation — replaced TODO placeholder with `POST /ideas/create` route + `_serialize_idea` helper |
 
 ### How it works
 
@@ -1164,7 +1164,7 @@ TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
 **Step 3 — Create an idea (minimal)**
 
 ```bash
-curl -s -X POST http://localhost:8000/api/ideas \
+curl -s -X POST http://localhost:8000/api/ideas/create \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"title": "My first idea"}' | python3 -m json.tool
@@ -1188,7 +1188,7 @@ Expected `201`:
 **Step 4 — Create an idea (all fields)**
 
 ```bash
-curl -s -X POST http://localhost:8000/api/ideas \
+curl -s -X POST http://localhost:8000/api/ideas/create \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -1204,36 +1204,36 @@ curl -s -X POST http://localhost:8000/api/ideas \
 
 ```bash
 # Missing title — 422
-curl -s -X POST http://localhost:8000/api/ideas \
+curl -s -X POST http://localhost:8000/api/ideas/create \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"description": "no title here"}'
 
 # Title too long — 422
-curl -s -X POST http://localhost:8000/api/ideas \
+curl -s -X POST http://localhost:8000/api/ideas/create \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"title\": \"$(python3 -c 'print("x"*201)')\"}"
 
 # Duplicate tags — 422
-curl -s -X POST http://localhost:8000/api/ideas \
+curl -s -X POST http://localhost:8000/api/ideas/create \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"title": "Test", "tags": ["AI", "ai"]}'
 
 # Invalid status enum — 422
-curl -s -X POST http://localhost:8000/api/ideas \
+curl -s -X POST http://localhost:8000/api/ideas/create \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"title": "Test", "status": "notastatus"}'
 
 # No Authorization header — 403
-curl -s -X POST http://localhost:8000/api/ideas \
+curl -s -X POST http://localhost:8000/api/ideas/create \
   -H "Content-Type: application/json" \
   -d '{"title": "Test"}'
 
 # Invalid JWT — 401
-curl -s -X POST http://localhost:8000/api/ideas \
+curl -s -X POST http://localhost:8000/api/ideas/create \
   -H "Authorization: Bearer notajwt" \
   -H "Content-Type: application/json" \
   -d '{"title": "Test"}'
@@ -1250,12 +1250,12 @@ curl -s -X POST http://localhost:8000/api/ideas \
 1. Open **http://localhost:8000/docs**
 2. Log in via `POST /auth/login` → copy `access_token`
 3. Click **Authorize** → paste the token
-4. Open `POST /ideas` → **Try it out** → enter a body → **Execute**
+4. Open `POST /ideas/create` → **Try it out** → enter a body → **Execute**
 5. Response should be `201` with the full idea document
 
 ---
 
-## Ideas — GET /ideas (List Ideas — Paginated)
+## Ideas — GET /ideas/list (List Ideas — Paginated)
 
 ### What it does
 
@@ -1288,7 +1288,7 @@ Returns the authenticated user's ideas from MongoDB as a paginated, sorted list.
 | File | What changed |
 |---|---|
 | `backend/app/schemas/idea.py` | Added `IdeaListResponse` — wraps `items`, `total`, `page`, `limit` |
-| `backend/app/api/ideas.py` | Added `GET /ideas` route with pagination, sorting, and priority weight fix |
+| `backend/app/api/ideas.py` | Added `GET /ideas/list` route with pagination, sorting, and priority weight fix |
 
 ### How priority sorting works
 
@@ -1313,7 +1313,7 @@ TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
 
 ```bash
 for title in "Idea One" "Idea Two" "Idea Three" "Idea Four" "Idea Five"; do
-  curl -s -X POST http://localhost:8000/api/ideas \
+  curl -s -X POST http://localhost:8000/api/ideas/create \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d "{\"title\": \"$title\", \"priority\": \"high\"}" > /dev/null
@@ -1323,7 +1323,7 @@ done
 **Step 3 — List all ideas (defaults: page=1, limit=10, sort_by=createdAt, order=desc)**
 
 ```bash
-curl -s "http://localhost:8000/api/ideas" \
+curl -s "http://localhost:8000/api/ideas/list" \
   -H "Authorization: Bearer $TOKEN" \
   | python3 -m json.tool
 ```
@@ -1342,17 +1342,17 @@ Expected response shape:
 
 ```bash
 # Page 1 — first 2 ideas
-curl -s "http://localhost:8000/api/ideas?page=1&limit=2" \
+curl -s "http://localhost:8000/api/ideas/list?page=1&limit=2" \
   -H "Authorization: Bearer $TOKEN" \
   | python3 -m json.tool
 
 # Page 2 — next 2 ideas
-curl -s "http://localhost:8000/api/ideas?page=2&limit=2" \
+curl -s "http://localhost:8000/api/ideas/list?page=2&limit=2" \
   -H "Authorization: Bearer $TOKEN" \
   | python3 -m json.tool
 
 # Page 3 — last 1 idea (if total=5)
-curl -s "http://localhost:8000/api/ideas?page=3&limit=2" \
+curl -s "http://localhost:8000/api/ideas/list?page=3&limit=2" \
   -H "Authorization: Bearer $TOKEN" \
   | python3 -m json.tool
 ```
@@ -1361,17 +1361,17 @@ curl -s "http://localhost:8000/api/ideas?page=3&limit=2" \
 
 ```bash
 # Oldest first
-curl -s "http://localhost:8000/api/ideas?sort_by=createdAt&order=asc" \
+curl -s "http://localhost:8000/api/ideas/list?sort_by=createdAt&order=asc" \
   -H "Authorization: Bearer $TOKEN" \
   | python3 -c "import sys,json; items=json.load(sys.stdin)['items']; [print(i['title'], i['createdAt']) for i in items]"
 
 # By priority — high first
-curl -s "http://localhost:8000/api/ideas?sort_by=priority&order=desc" \
+curl -s "http://localhost:8000/api/ideas/list?sort_by=priority&order=desc" \
   -H "Authorization: Bearer $TOKEN" \
   | python3 -c "import sys,json; items=json.load(sys.stdin)['items']; [print(i['title'], i['priority']) for i in items]"
 
 # By priority — low first
-curl -s "http://localhost:8000/api/ideas?sort_by=priority&order=asc" \
+curl -s "http://localhost:8000/api/ideas/list?sort_by=priority&order=asc" \
   -H "Authorization: Bearer $TOKEN" \
   | python3 -c "import sys,json; items=json.load(sys.stdin)['items']; [print(i['title'], i['priority']) for i in items]"
 ```
@@ -1380,12 +1380,12 @@ curl -s "http://localhost:8000/api/ideas?sort_by=priority&order=asc" \
 
 ```bash
 # Invalid sort_by — 400
-curl -s "http://localhost:8000/api/ideas?sort_by=email" \
+curl -s "http://localhost:8000/api/ideas/list?sort_by=email" \
   -H "Authorization: Bearer $TOKEN"
 # → {"detail": "Invalid sort_by 'email'. Must be one of: createdAt, priority, updatedAt"}
 
 # Invalid order — 400
-curl -s "http://localhost:8000/api/ideas?order=random" \
+curl -s "http://localhost:8000/api/ideas/list?order=random" \
   -H "Authorization: Bearer $TOKEN"
 # → {"detail": "Invalid order. Must be 'asc' or 'desc'"}
 ```
@@ -1394,11 +1394,11 @@ curl -s "http://localhost:8000/api/ideas?order=random" \
 
 ```bash
 # No token — 403
-curl -s "http://localhost:8000/api/ideas"
+curl -s "http://localhost:8000/api/ideas/list"
 # → {"detail": "Not authenticated"}
 
 # Invalid JWT — 401
-curl -s "http://localhost:8000/api/ideas" -H "Authorization: Bearer notreal"
+curl -s "http://localhost:8000/api/ideas/list" -H "Authorization: Bearer notreal"
 # → {"detail": "Invalid or expired access token"}
 ```
 
@@ -1407,12 +1407,12 @@ curl -s "http://localhost:8000/api/ideas" -H "Authorization: Bearer notreal"
 1. Open **http://localhost:8000/docs**
 2. Log in via `POST /auth/login` → copy `access_token`
 3. Click **Authorize** → paste the token
-4. Open `GET /ideas` → **Try it out** → set `page`, `limit`, `sort_by`, `order` → **Execute**
+4. Open `GET /ideas/list` → **Try it out** → set `page`, `limit`, `sort_by`, `order` → **Execute**
 5. Response should be `200` with `items`, `total`, `page`, `limit`
 
 ---
 
-## Ideas — GET /ideas/{id} (Get Single Idea)
+## Ideas — GET /ideas/get/{id} (Get Single Idea)
 
 ### What it does
 
@@ -1439,7 +1439,7 @@ If we returned `422` for a malformed id (e.g. `"abc"`), attackers could distingu
 
 | File | What changed |
 |---|---|
-| `backend/app/api/ideas.py` | Added `_parse_object_id()` helper and `GET /ideas/{idea_id}` route |
+| `backend/app/api/ideas.py` | Added `_parse_object_id()` helper and `GET /ideas/get/{idea_id}` route |
 
 ### How to verify
 
@@ -1452,7 +1452,7 @@ TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
 # Create an idea and capture its id
-IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas \
+IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas/create \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"title": "My idea"}' \
@@ -1464,7 +1464,7 @@ echo "Idea ID: $IDEA_ID"
 **Step 2 — Fetch the idea by id**
 
 ```bash
-curl -s "http://localhost:8000/api/ideas/$IDEA_ID" \
+curl -s "http://localhost:8000/api/ideas/get/$IDEA_ID" \
   -H "Authorization: Bearer $TOKEN" \
   | python3 -m json.tool
 ```
@@ -1517,7 +1517,7 @@ TOKEN2=$(curl -s -X POST http://localhost:8000/api/auth/login \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
 # Try to access the first user's idea using the second user's token
-curl -s "http://localhost:8000/api/ideas/$IDEA_ID" \
+curl -s "http://localhost:8000/api/ideas/get/$IDEA_ID" \
   -H "Authorization: Bearer $TOKEN2"
 # → 403 {"detail": "You do not have permission to access this idea"}
 ```
@@ -1526,10 +1526,10 @@ curl -s "http://localhost:8000/api/ideas/$IDEA_ID" \
 
 ```bash
 # No token — 403
-curl -s "http://localhost:8000/api/ideas/$IDEA_ID"
+curl -s "http://localhost:8000/api/ideas/get/$IDEA_ID"
 
 # Expired/invalid JWT — 401
-curl -s "http://localhost:8000/api/ideas/$IDEA_ID" \
+curl -s "http://localhost:8000/api/ideas/get/$IDEA_ID" \
   -H "Authorization: Bearer notreal"
 ```
 
@@ -1537,12 +1537,12 @@ curl -s "http://localhost:8000/api/ideas/$IDEA_ID" \
 
 1. Open **http://localhost:8000/docs**
 2. Authorize with a valid access token
-3. Open `GET /ideas/{idea_id}` → **Try it out** → paste a real idea id → **Execute**
+3. Open `GET /ideas/get/{idea_id}` → **Try it out** → paste a real idea id → **Execute**
 4. Expected `200` with the full idea document
 
 ---
 
-## Ideas — PUT /ideas/{id} (Update Idea)
+## Ideas — PUT /ideas/update/{id} (Update Idea)
 
 ### What it does
 
@@ -1560,7 +1560,7 @@ Timestamps track when a document was last touched, not just when payload fields 
 The response must reflect exactly what's in MongoDB. Building the response locally by merging old + new fields risks subtle drift. Re-fetching guarantees consistency.
 
 **Ownership check: 403, not 404**
-Same rule as `GET /ideas/{id}` — see that section for the full rationale.
+Same rule as `GET /ideas/get/{id}` — see that section for the full rationale.
 
 ### All fields are optional in the request body
 
@@ -1576,7 +1576,7 @@ Same rule as `GET /ideas/{id}` — see that section for the full rationale.
 
 | File | What changed |
 |---|---|
-| `backend/app/api/ideas.py` | Added `IdeaUpdate` to imports; added `PUT /ideas/{idea_id}` route |
+| `backend/app/api/ideas.py` | Added `IdeaUpdate` to imports; added `PUT /ideas/update/{idea_id}` route |
 
 ### How to verify
 
@@ -1588,7 +1588,7 @@ TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
   -d '{"email": "you@example.com", "password": "Secret123"}' \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
-IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas \
+IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas/create \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"title": "Original title", "status": "raw", "priority": "low"}' \
@@ -1600,7 +1600,7 @@ echo "Idea ID: $IDEA_ID"
 **Step 2 — Update a single field only**
 
 ```bash
-curl -s -X PUT "http://localhost:8000/api/ideas/$IDEA_ID" \
+curl -s -X PUT "http://localhost:8000/api/ideas/update/$IDEA_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"status": "exploring"}' \
@@ -1611,7 +1611,7 @@ curl -s -X PUT "http://localhost:8000/api/ideas/$IDEA_ID" \
 **Step 3 — Update multiple fields at once**
 
 ```bash
-curl -s -X PUT "http://localhost:8000/api/ideas/$IDEA_ID" \
+curl -s -X PUT "http://localhost:8000/api/ideas/update/$IDEA_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -1625,7 +1625,7 @@ curl -s -X PUT "http://localhost:8000/api/ideas/$IDEA_ID" \
 **Step 4 — Confirm `updatedAt` advanced but `createdAt` is unchanged**
 
 ```bash
-curl -s "http://localhost:8000/api/ideas/$IDEA_ID" \
+curl -s "http://localhost:8000/api/ideas/get/$IDEA_ID" \
   -H "Authorization: Bearer $TOKEN" \
   | python3 -c "import sys,json; d=json.load(sys.stdin); print('created:', d['createdAt']); print('updated:', d['updatedAt'])"
 # createdAt and updatedAt should differ
@@ -1650,7 +1650,7 @@ TOKEN2=$(curl -s -X POST http://localhost:8000/api/auth/login \
   -d '{"email": "other@example.com", "password": "Other1234"}' \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
-curl -s -X PUT "http://localhost:8000/api/ideas/$IDEA_ID" \
+curl -s -X PUT "http://localhost:8000/api/ideas/update/$IDEA_ID" \
   -H "Authorization: Bearer $TOKEN2" \
   -H "Content-Type: application/json" \
   -d '{"title": "Hijacked"}' 
@@ -1661,13 +1661,13 @@ curl -s -X PUT "http://localhost:8000/api/ideas/$IDEA_ID" \
 
 ```bash
 # Invalid status value
-curl -s -X PUT "http://localhost:8000/api/ideas/$IDEA_ID" \
+curl -s -X PUT "http://localhost:8000/api/ideas/update/$IDEA_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"status": "notvalid"}'
 
 # Title too long
-curl -s -X PUT "http://localhost:8000/api/ideas/$IDEA_ID" \
+curl -s -X PUT "http://localhost:8000/api/ideas/update/$IDEA_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"title\": \"$(python3 -c 'print(\"x\"*201)')\"}"
@@ -1677,13 +1677,13 @@ curl -s -X PUT "http://localhost:8000/api/ideas/$IDEA_ID" \
 
 1. Open **http://localhost:8000/docs**
 2. Authorize with your access token
-3. Open `PUT /ideas/{idea_id}` → **Try it out**
+3. Open `PUT /ideas/update/{idea_id}` → **Try it out**
 4. Paste the idea id and a partial body (e.g. `{"priority": "high"}`)
 5. Expected `200` with the full updated idea document
 
 ---
 
-## Ideas — DELETE /ideas/{id} (Delete Idea)
+## Ideas — DELETE /ideas/delete/{id} (Delete Idea)
 
 ### What it does
 
@@ -1695,7 +1695,7 @@ Permanently deletes an idea owned by the authenticated user. Returns `204 No Con
 `delete_one` only tells you how many documents were deleted (`deleted_count`). If that count is 0, it could mean either "not found" or "wrong owner" — you can't distinguish the two. Fetching first lets us check existence (404) and ownership (403) separately, giving the client accurate error information.
 
 **Why 403 instead of 404 when the idea belongs to someone else?**
-Same rule as `GET /ideas/{id}` and `PUT /ideas/{id}` — the authenticated user can tell the resource exists but they are not allowed to touch it. Hiding it as 404 is more secure but inconsistent with the rest of the API design here.
+Same rule as `GET /ideas/get/{id}` and `PUT /ideas/update/{id}` — the authenticated user can tell the resource exists but they are not allowed to touch it. Hiding it as 404 is more secure but inconsistent with the rest of the API design here.
 
 **Why `Response(status_code=204)` instead of returning `None`?**
 FastAPI skips body serialisation when you explicitly return a `Response` object. Returning `None` could cause FastAPI to try serialising `null` or leave an ambiguous response depending on the declared `response_model`. Explicit is safer.
@@ -1704,7 +1704,7 @@ FastAPI skips body serialisation when you explicitly return a `Response` object.
 
 | File | What changed |
 |---|---|
-| `backend/app/api/ideas.py` | Added `Response` to FastAPI imports; added `DELETE /ideas/{idea_id}` route |
+| `backend/app/api/ideas.py` | Added `Response` to FastAPI imports; added `DELETE /ideas/delete/{idea_id}` route |
 
 ### How to verify
 
@@ -1716,7 +1716,7 @@ TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
   -d '{"email": "you@example.com", "password": "Secret123"}' \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
-IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas \
+IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas/create \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"title": "To be deleted", "priority": "low"}' \
@@ -1729,7 +1729,7 @@ echo "Idea ID: $IDEA_ID"
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}" \
-  -X DELETE "http://localhost:8000/api/ideas/$IDEA_ID" \
+  -X DELETE "http://localhost:8000/api/ideas/delete/$IDEA_ID" \
   -H "Authorization: Bearer $TOKEN"
 # → 204
 ```
@@ -1737,7 +1737,7 @@ curl -s -o /dev/null -w "%{http_code}" \
 **Step 3 — Confirm it's gone (expect 404)**
 
 ```bash
-curl -s -X GET "http://localhost:8000/api/ideas/$IDEA_ID" \
+curl -s -X GET "http://localhost:8000/api/ideas/get/$IDEA_ID" \
   -H "Authorization: Bearer $TOKEN"
 # → {"detail": "Idea not found"}
 ```
@@ -1759,13 +1759,13 @@ TOKEN2=$(curl -s -X POST http://localhost:8000/api/auth/login \
   -d '{"email": "other@example.com", "password": "Other1234"}' \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
-IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas \
+IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas/create \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"title": "User 1 idea"}' \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
 
-curl -s -X DELETE "http://localhost:8000/api/ideas/$IDEA_ID" \
+curl -s -X DELETE "http://localhost:8000/api/ideas/delete/$IDEA_ID" \
   -H "Authorization: Bearer $TOKEN2"
 # → 403 {"detail": "You do not have permission to delete this idea"}
 ```
@@ -1773,7 +1773,7 @@ curl -s -X DELETE "http://localhost:8000/api/ideas/$IDEA_ID" \
 **Step 6 — Test 401 (no token)**
 
 ```bash
-curl -s -X DELETE "http://localhost:8000/api/ideas/$IDEA_ID"
+curl -s -X DELETE "http://localhost:8000/api/ideas/delete/$IDEA_ID"
 # → 403 {"detail": "Not authenticated"}
 ```
 
@@ -1781,7 +1781,7 @@ curl -s -X DELETE "http://localhost:8000/api/ideas/$IDEA_ID"
 
 1. Open **http://localhost:8000/docs**
 2. Authorize with your access token
-3. Open `DELETE /ideas/{idea_id}` → **Try it out**
+3. Open `DELETE /ideas/delete/{idea_id}` → **Try it out**
 4. Paste a valid idea id owned by you
 5. Expected `204` with an empty response body
 

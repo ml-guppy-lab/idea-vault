@@ -33,7 +33,7 @@ def _serialize_idea(doc: dict) -> dict:
 
 
 @router.post(
-    "",
+    "/create",
     status_code=status.HTTP_201_CREATED,
     response_model=IdeaResponse,
     summary="Create a new idea",
@@ -101,7 +101,7 @@ _PRIORITY_WEIGHT = {"low": 1, "medium": 2, "high": 3}
 
 
 @router.get(
-    "",
+    "/list",
     status_code=status.HTTP_200_OK,
     response_model=IdeaListResponse,
     summary="List the logged-in user's ideas (paginated)",
@@ -241,7 +241,7 @@ def _parse_object_id(idea_id: str) -> ObjectId:
 
 
 @router.get(
-    "/{idea_id}",
+    "/get/{idea_id}",
     status_code=status.HTTP_200_OK,
     response_model=IdeaResponse,
     summary="Get a single idea by ID",
@@ -296,7 +296,7 @@ async def get_idea(
 
 
 @router.put(
-    "/{idea_id}",
+    "/update/{idea_id}",
     status_code=status.HTTP_200_OK,
     response_model=IdeaResponse,
     summary="Partially update an idea by ID",
@@ -369,7 +369,7 @@ async def update_idea(
 
 
 @router.delete(
-    "/{idea_id}",
+    "/delete/{idea_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete an idea by ID",
 )
