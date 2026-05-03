@@ -1253,6 +1253,164 @@ curl -s -X POST http://localhost:8000/api/ideas \
 4. Open `POST /ideas` → **Try it out** → enter a body → **Execute**
 5. Response should be `201` with the full idea document
 
+---
+
+## Ideas — GET /ideas (List Ideas — Paginated)
+
+### What it does
+
+Returns the authenticated user's ideas from MongoDB as a paginated, sorted list. Only ideas where `userId` matches the JWT are returned — users can never see each other's ideas. Supports `page`, `limit`, `sort_by`, and `order` query parameters.
+
+### Query parameters
+
+| Param | Type | Default | Allowed values | Notes |
+|---|---|---|---|---|
+| `page` | int | `1` | ≥ 1 | 1-based page number |
+| `limit` | int | `10` | 1–100 | items per page |
+| `sort_by` | string | `createdAt` | `createdAt`, `updatedAt`, `priority` | field to sort by |
+| `order` | string | `desc` | `asc`, `desc` | sort direction |
+
+### Response shape
+
+```json
+{
+  "items": [ ...IdeaResponse objects... ],
+  "total": 42,
+  "page": 1,
+  "limit": 10
+}
+```
+
+`total` is the count of all matching ideas (not just this page) — the frontend uses it to calculate total page count.
+
+### Files created / changed
+
+| File | What changed |
+|---|---|
+| `backend/app/schemas/idea.py` | Added `IdeaListResponse` — wraps `items`, `total`, `page`, `limit` |
+| `backend/app/api/ideas.py` | Added `GET /ideas` route with pagination, sorting, and priority weight fix |
+
+### How priority sorting works
+
+`priority` is a string enum (`low`, `medium`, `high`). Sorting alphabetically gives the wrong order (`high < low < medium`). Instead, a MongoDB aggregation pipeline adds a temporary `_priorityWeight` field (`low=1`, `medium=2`, `high=3`), sorts by that number, then removes the field before returning. Result: `asc` = low → medium → high, `desc` = high → medium → low.
+
+For `createdAt` and `updatedAt`, a simpler `find().sort().skip().limit()` is used — no pipeline needed.
+
+### How to verify
+
+**Step 1 — Restart the backend and get a token**
+
+```bash
+uvicorn app.main:app --reload --port 8000
+
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+```
+
+**Step 2 — Create a few test ideas (so there's data to page through)**
+
+```bash
+for title in "Idea One" "Idea Two" "Idea Three" "Idea Four" "Idea Five"; do
+  curl -s -X POST http://localhost:8000/api/ideas \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"title\": \"$title\", \"priority\": \"high\"}" > /dev/null
+done
+```
+
+**Step 3 — List all ideas (defaults: page=1, limit=10, sort_by=createdAt, order=desc)**
+
+```bash
+curl -s "http://localhost:8000/api/ideas" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+```
+
+Expected response shape:
+```json
+{
+  "items": [ ... ],
+  "total": 5,
+  "page": 1,
+  "limit": 10
+}
+```
+
+**Step 4 — Test pagination**
+
+```bash
+# Page 1 — first 2 ideas
+curl -s "http://localhost:8000/api/ideas?page=1&limit=2" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+
+# Page 2 — next 2 ideas
+curl -s "http://localhost:8000/api/ideas?page=2&limit=2" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+
+# Page 3 — last 1 idea (if total=5)
+curl -s "http://localhost:8000/api/ideas?page=3&limit=2" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+```
+
+**Step 5 — Test sorting**
+
+```bash
+# Oldest first
+curl -s "http://localhost:8000/api/ideas?sort_by=createdAt&order=asc" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; items=json.load(sys.stdin)['items']; [print(i['title'], i['createdAt']) for i in items]"
+
+# By priority — high first
+curl -s "http://localhost:8000/api/ideas?sort_by=priority&order=desc" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; items=json.load(sys.stdin)['items']; [print(i['title'], i['priority']) for i in items]"
+
+# By priority — low first
+curl -s "http://localhost:8000/api/ideas?sort_by=priority&order=asc" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; items=json.load(sys.stdin)['items']; [print(i['title'], i['priority']) for i in items]"
+```
+
+**Step 6 — Test invalid params (should return 400)**
+
+```bash
+# Invalid sort_by — 400
+curl -s "http://localhost:8000/api/ideas?sort_by=email" \
+  -H "Authorization: Bearer $TOKEN"
+# → {"detail": "Invalid sort_by 'email'. Must be one of: createdAt, priority, updatedAt"}
+
+# Invalid order — 400
+curl -s "http://localhost:8000/api/ideas?order=random" \
+  -H "Authorization: Bearer $TOKEN"
+# → {"detail": "Invalid order. Must be 'asc' or 'desc'"}
+```
+
+**Step 7 — Test auth protection**
+
+```bash
+# No token — 403
+curl -s "http://localhost:8000/api/ideas"
+# → {"detail": "Not authenticated"}
+
+# Invalid JWT — 401
+curl -s "http://localhost:8000/api/ideas" -H "Authorization: Bearer notreal"
+# → {"detail": "Invalid or expired access token"}
+```
+
+**Step 8 — Verify via Swagger UI**
+
+1. Open **http://localhost:8000/docs**
+2. Log in via `POST /auth/login` → copy `access_token`
+3. Click **Authorize** → paste the token
+4. Open `GET /ideas` → **Try it out** → set `page`, `limit`, `sort_by`, `order` → **Execute**
+5. Response should be `200` with `items`, `total`, `page`, `limit`
+
+
 
 
 

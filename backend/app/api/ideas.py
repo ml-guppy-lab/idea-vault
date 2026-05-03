@@ -9,13 +9,13 @@ PostgreSQL. The `userId` stored on every idea document is that user's id string.
 from datetime import datetime, timezone
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.core.security import get_current_user
 from app.db.mongodb import get_mongo_db
 from app.models.user import User
-from app.schemas.idea import IdeaCreate, IdeaResponse
+from app.schemas.idea import IdeaCreate, IdeaListResponse, IdeaResponse
 
 router = APIRouter(prefix="/ideas", tags=["ideas"])
 
@@ -81,4 +81,141 @@ async def create_idea(
 
     # Convert ObjectId → str so IdeaResponse (alias="_id") can parse it.
     return IdeaResponse(**_serialize_idea(saved))
+
+
+# ---------------------------------------------------------------------------
+# Allowed values for sort_by and order query parameters.
+# Defined as constants here so the validation logic and the MongoDB sort
+# direction map are in one place — no magic strings scattered around.
+# ---------------------------------------------------------------------------
+
+_SORTABLE_FIELDS = {"createdAt", "updatedAt", "priority"}
+
+# MongoDB uses 1 for ascending, -1 for descending.
+_SORT_DIRECTION = {"asc": 1, "desc": -1}
+
+# Priority has a custom sort order — it is a string enum, so alphabetical
+# order (high < low < medium) is wrong. We use a computed field trick:
+# add a temporary numeric weight in the aggregation pipeline instead.
+_PRIORITY_WEIGHT = {"low": 1, "medium": 2, "high": 3}
+
+
+@router.get(
+    "",
+    status_code=status.HTTP_200_OK,
+    response_model=IdeaListResponse,
+    summary="List the logged-in user's ideas (paginated)",
+)
+async def list_ideas(
+    # --- pagination params ---
+    page: int = Query(default=1, ge=1, description="Page number, 1-based"),
+    limit: int = Query(default=10, ge=1, le=100, description="Items per page (max 100)"),
+
+    # --- sorting params ---
+    sort_by: str = Query(
+        default="createdAt",
+        description="Field to sort by: createdAt | updatedAt | priority",
+    ),
+    order: str = Query(
+        default="desc",
+        description="Sort direction: asc | desc",
+    ),
+
+    # --- auth + db dependencies ---
+    current_user: User = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_mongo_db),
+) -> IdeaListResponse:
+    """
+    Return a paginated, sorted list of ideas owned by the authenticated user.
+
+    - Only ideas where `userId == current_user.id` are returned.
+    - `page` and `limit` control which slice of results to return.
+    - `sort_by` accepts: createdAt, updatedAt, priority.
+    - `order` accepts: asc, desc.
+    - Priority sorting uses a numeric weight (low=1, medium=2, high=3)
+      because alphabetical order of the enum strings is incorrect.
+    """
+
+    # --- validate sort_by and order before touching the DB ---
+    # Reject unknown values with a clear 400 instead of a silent MongoDB error.
+    if sort_by not in _SORTABLE_FIELDS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid sort_by '{sort_by}'. Must be one of: {', '.join(sorted(_SORTABLE_FIELDS))}",
+        )
+    if order not in _SORT_DIRECTION:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid order. Must be 'asc' or 'desc'",
+        )
+
+    # --- base filter: only this user's ideas ---
+    query_filter = {"userId": current_user.id}
+
+    # --- calculate how many documents to skip for the requested page ---
+    # e.g. page=2, limit=10 → skip 10 documents, return documents 11-20
+    skip = (page - 1) * limit
+
+    # --- count total matching documents for the pagination metadata ---
+    # count_documents is an indexed operation (userId has an index) — fast.
+    total = await db.ideas.count_documents(query_filter)
+
+    # --- build the sort specification ---
+    if sort_by == "priority":
+        # Priority is a string enum — MongoDB would sort alphabetically which
+        # gives wrong order (high < low < medium). Instead we add a temporary
+        # numeric `_priorityWeight` field in an aggregation pipeline, sort by
+        # that, then remove it before returning.
+        direction = _SORT_DIRECTION[order]
+        pipeline = [
+            # Stage 1: filter to this user's ideas only
+            {"$match": query_filter},
+
+            # Stage 2: add a numeric weight field so we can sort correctly
+            {"$addFields": {
+                "_priorityWeight": {
+                    "$switch": {
+                        "branches": [
+                            {"case": {"$eq": ["$priority", "low"]},    "then": 1},
+                            {"case": {"$eq": ["$priority", "medium"]}, "then": 2},
+                            {"case": {"$eq": ["$priority", "high"]},   "then": 3},
+                        ],
+                        "default": 0,
+                    }
+                }
+            }},
+
+            # Stage 3: sort by weight
+            {"$sort": {"_priorityWeight": direction}},
+
+            # Stage 4: remove the temporary weight field before returning
+            {"$unset": "_priorityWeight"},
+
+            # Stage 5: pagination — skip and limit
+            {"$skip": skip},
+            {"$limit": limit},
+        ]
+        cursor = db.ideas.aggregate(pipeline)
+        docs = await cursor.to_list(length=limit)
+
+    else:
+        # For createdAt and updatedAt: straightforward find + sort
+        direction = _SORT_DIRECTION[order]
+        cursor = (
+            db.ideas.find(query_filter)
+            .sort(sort_by, direction)
+            .skip(skip)
+            .limit(limit)
+        )
+        docs = await cursor.to_list(length=limit)
+
+    # --- serialize each document: ObjectId → string ---
+    items = [IdeaResponse(**_serialize_idea(doc)) for doc in docs]
+
+    return IdeaListResponse(
+        items=items,
+        total=total,
+        page=page,
+        limit=limit,
+    )
 

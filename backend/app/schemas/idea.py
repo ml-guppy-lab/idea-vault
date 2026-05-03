@@ -99,3 +99,13 @@ class IdeaInDB(BaseModel):
     updatedAt: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+
+
+# --- Paginated list response (what GET /ideas returns) ---
+# Wraps a page of IdeaResponse items with pagination metadata.
+
+class IdeaListResponse(BaseModel):
+    items: list[IdeaResponse]   # the ideas on this page
+    total: int                  # total matching documents in MongoDB (across all pages)
+    page: int                   # current page number (1-based)
+    limit: int                  # max items per page
