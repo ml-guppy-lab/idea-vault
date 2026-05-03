@@ -1091,6 +1091,169 @@ async def list_ideas(current_user: User = Depends(get_current_user)):
 
 No additional code is needed — FastAPI handles the entire auth flow automatically.
 
+---
+
+## Ideas — POST /ideas (Create Idea)
+
+### What it does
+
+Creates a new idea document in MongoDB. Requires a valid JWT — the `userId` on every idea is taken from the token, not from the request body, so it can never be spoofed. Returns `201 Created` with the full saved document including the MongoDB-generated `_id` as `id`.
+
+### Fields
+
+| Field | Required | Type | Default | Validation |
+|---|---|---|---|---|
+| `title` | ✅ | string | — | 1–200 characters |
+| `description` | ❌ | string | `null` | max 5000 characters |
+| `tags` | ❌ | array of strings | `[]` | each tag: non-empty, max 50 chars, no duplicates |
+| `status` | ❌ | enum | `raw` | `raw`, `exploring`, `validated`, `building`, `shipped`, `abandoned` |
+| `priority` | ❌ | enum | `low` | `low`, `medium`, `high` |
+
+Server-controlled (never sent by client):
+
+| Field | Set by |
+|---|---|
+| `userId` | Decoded from JWT — the authenticated user's id |
+| `createdAt` | Server UTC timestamp at insert time |
+| `updatedAt` | Same as `createdAt` on creation |
+| `_id` (→ `id`) | MongoDB auto-generated ObjectId, returned as string |
+
+### Files created / changed
+
+| File | What changed |
+|---|---|
+| `backend/app/schemas/idea.py` | Added `@field_validator("tags")` — strips whitespace, rejects empty/long/duplicate tags |
+| `backend/app/api/ideas.py` | Full implementation — replaced TODO placeholder with `POST /ideas` route + `_serialize_idea` helper |
+
+### How it works
+
+1. `get_current_user` runs first — validates JWT, fetches `User` from PostgreSQL, returns it or raises `401`/`403`
+2. Pydantic validates `IdeaCreate` — rejects bad input with `422` before the route body runs
+3. A UTC timestamp is captured once (`now`) and used for both `createdAt` and `updatedAt`
+4. The document is assembled by spreading `payload.model_dump()` + injecting `userId`, `createdAt`, `updatedAt`
+5. `db.ideas.insert_one(document)` writes to MongoDB — Motor returns the generated `_id`
+6. `db.ideas.find_one({"_id": result.inserted_id})` fetches the saved document back (ensures we return exactly what was stored)
+7. `_serialize_idea()` converts the BSON `ObjectId` → plain string so `IdeaResponse(alias="_id")` maps it to `id`
+8. Returns `201` with the full `IdeaResponse`
+
+### Why fetch back after insert?
+
+`insert_one` only returns the `_id`. Reconstructing the document in Python would risk drift if MongoDB applies any transforms. Fetching back guarantees the response matches exactly what's in the database.
+
+### Why `userId` comes from the JWT, not the request body
+
+If the client sent `userId`, any authenticated user could create ideas for any other user by passing someone else's id. Taking it from the verified token eliminates the attack surface entirely.
+
+### How to verify
+
+**Step 1 — Restart the backend**
+
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+
+**Step 2 — Log in to get a token**
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}' \
+  | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['access_token'])")
+```
+
+**Step 3 — Create an idea (minimal)**
+
+```bash
+curl -s -X POST http://localhost:8000/api/ideas \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "My first idea"}' | python3 -m json.tool
+```
+
+Expected `201`:
+```json
+{
+  "id": "664a1b2c3d4e5f6a7b8c9d0e",
+  "userId": "90a804a9-0700-4f87e3-...",
+  "title": "My first idea",
+  "description": null,
+  "tags": [],
+  "status": "raw",
+  "priority": "low",
+  "createdAt": "2026-05-03T12:00:00.000Z",
+  "updatedAt": "2026-05-03T12:00:00.000Z"
+}
+```
+
+**Step 4 — Create an idea (all fields)**
+
+```bash
+curl -s -X POST http://localhost:8000/api/ideas \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "AI-powered journal",
+    "description": "An app that summarises your daily notes using GPT",
+    "tags": ["AI", "productivity", "SaaS"],
+    "status": "exploring",
+    "priority": "high"
+  }' | python3 -m json.tool
+```
+
+**Step 5 — Test validation errors**
+
+```bash
+# Missing title — 422
+curl -s -X POST http://localhost:8000/api/ideas \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"description": "no title here"}'
+
+# Title too long — 422
+curl -s -X POST http://localhost:8000/api/ideas \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"title\": \"$(python3 -c 'print("x"*201)')\"}"
+
+# Duplicate tags — 422
+curl -s -X POST http://localhost:8000/api/ideas \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Test", "tags": ["AI", "ai"]}'
+
+# Invalid status enum — 422
+curl -s -X POST http://localhost:8000/api/ideas \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Test", "status": "notastatus"}'
+
+# No Authorization header — 403
+curl -s -X POST http://localhost:8000/api/ideas \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Test"}'
+
+# Invalid JWT — 401
+curl -s -X POST http://localhost:8000/api/ideas \
+  -H "Authorization: Bearer notajwt" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Test"}'
+```
+
+**Step 6 — Confirm in MongoDB Compass**
+
+1. Open **MongoDB Compass** → connect
+2. Go to `idea_vault` → `ideas` collection
+3. You should see the documents created above, each with `userId` matching your user's PostgreSQL `id`
+
+**Step 7 — Verify via Swagger UI**
+
+1. Open **http://localhost:8000/docs**
+2. Log in via `POST /auth/login` → copy `access_token`
+3. Click **Authorize** → paste the token
+4. Open `POST /ideas` → **Try it out** → enter a body → **Execute**
+5. Response should be `201` with the full idea document
+
+
 
 
 
