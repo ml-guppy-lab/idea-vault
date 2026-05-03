@@ -9,7 +9,7 @@ PostgreSQL. The `userId` stored on every idea document is that user's id string.
 from datetime import datetime, timezone
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.core.security import get_current_user
@@ -366,4 +366,58 @@ async def update_idea(
     updated = await db.ideas.find_one({"_id": oid})
 
     return IdeaResponse(**_serialize_idea(updated))
+
+
+@router.delete(
+    "/{idea_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete an idea by ID",
+)
+async def delete_idea(
+    idea_id: str,
+    current_user: User = Depends(get_current_user),    # JWT auth gate
+    db: AsyncIOMotorDatabase = Depends(get_mongo_db),  # Motor DB dependency
+) -> Response:
+    """
+    Permanently delete an idea owned by the authenticated user.
+
+    - Only the owner can delete their own idea (403 for another user's idea).
+    - Returns 204 No Content on success — no response body.
+    - Returns 404 if the idea id is invalid or doesn't exist.
+    - Returns 403 if the idea exists but belongs to a different user.
+      (We intentionally distinguish 403 from 404 for authenticated owners.
+       See GET /ideas/{id} for the full rationale.)
+    """
+
+    # --- convert string id → ObjectId (raises 404 if format is invalid) ---
+    oid = _parse_object_id(idea_id)
+
+    # --- fetch the existing document to verify it exists and is owned by caller ---
+    # We must load the document first so we can check userId before deleting.
+    # Deleting blindly with a combined filter (userId + _id) would return
+    # deleted_count=0 for both "not found" and "wrong owner" — we can't tell
+    # which case it is, so we can't return the correct status code (404 vs 403).
+    doc = await db.ideas.find_one({"_id": oid})
+
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Idea not found",
+        )
+
+    # --- ownership check: 403 if the idea belongs to someone else ---
+    if doc["userId"] != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to delete this idea",
+        )
+
+    # --- delete the document from MongoDB ---
+    await db.ideas.delete_one({"_id": oid})
+
+    # --- return 204 No Content ---
+    # FastAPI sends an empty body automatically when Response(status_code=204)
+    # is returned and the route declares status_code=204. Returning Response
+    # directly (rather than None) avoids FastAPI trying to serialise a body.
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 

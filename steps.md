@@ -1681,6 +1681,110 @@ curl -s -X PUT "http://localhost:8000/api/ideas/$IDEA_ID" \
 4. Paste the idea id and a partial body (e.g. `{"priority": "high"}`)
 5. Expected `200` with the full updated idea document
 
+---
+
+## Ideas — DELETE /ideas/{id} (Delete Idea)
+
+### What it does
+
+Permanently deletes an idea owned by the authenticated user. Returns `204 No Content` on success with no response body. Returns `404` if the idea does not exist (or the id is malformed), and `403` if the idea exists but belongs to a different user.
+
+### Key design decisions
+
+**Why fetch before delete?**
+`delete_one` only tells you how many documents were deleted (`deleted_count`). If that count is 0, it could mean either "not found" or "wrong owner" — you can't distinguish the two. Fetching first lets us check existence (404) and ownership (403) separately, giving the client accurate error information.
+
+**Why 403 instead of 404 when the idea belongs to someone else?**
+Same rule as `GET /ideas/{id}` and `PUT /ideas/{id}` — the authenticated user can tell the resource exists but they are not allowed to touch it. Hiding it as 404 is more secure but inconsistent with the rest of the API design here.
+
+**Why `Response(status_code=204)` instead of returning `None`?**
+FastAPI skips body serialisation when you explicitly return a `Response` object. Returning `None` could cause FastAPI to try serialising `null` or leave an ambiguous response depending on the declared `response_model`. Explicit is safer.
+
+### Files changed
+
+| File | What changed |
+|---|---|
+| `backend/app/api/ideas.py` | Added `Response` to FastAPI imports; added `DELETE /ideas/{idea_id}` route |
+
+### How to verify
+
+**Step 1 — Create an idea to delete**
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "To be deleted", "priority": "low"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+echo "Idea ID: $IDEA_ID"
+```
+
+**Step 2 — Delete the idea (expect 204)**
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" \
+  -X DELETE "http://localhost:8000/api/ideas/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN"
+# → 204
+```
+
+**Step 3 — Confirm it's gone (expect 404)**
+
+```bash
+curl -s -X GET "http://localhost:8000/api/ideas/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN"
+# → {"detail": "Idea not found"}
+```
+
+**Step 4 — Test 404 with a nonexistent id**
+
+```bash
+curl -s -X DELETE "http://localhost:8000/api/ideas/000000000000000000000000" \
+  -H "Authorization: Bearer $TOKEN"
+# → {"detail": "Idea not found"}
+```
+
+**Step 5 — Test 403 (idea belongs to another user)**
+
+```bash
+# Create an idea with user 1, then try to delete it with user 2
+TOKEN2=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "other@example.com", "password": "Other1234"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "User 1 idea"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+curl -s -X DELETE "http://localhost:8000/api/ideas/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN2"
+# → 403 {"detail": "You do not have permission to delete this idea"}
+```
+
+**Step 6 — Test 401 (no token)**
+
+```bash
+curl -s -X DELETE "http://localhost:8000/api/ideas/$IDEA_ID"
+# → 403 {"detail": "Not authenticated"}
+```
+
+**Step 7 — Verify via Swagger UI**
+
+1. Open **http://localhost:8000/docs**
+2. Authorize with your access token
+3. Open `DELETE /ideas/{idea_id}` → **Try it out**
+4. Paste a valid idea id owned by you
+5. Expected `204` with an empty response body
+
 
 
 
