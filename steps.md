@@ -1259,16 +1259,19 @@ curl -s -X POST http://localhost:8000/api/ideas/create \
 
 ### What it does
 
-Returns the authenticated user's ideas from MongoDB as a paginated, sorted list. Only ideas where `userId` matches the JWT are returned — users can never see each other's ideas. Supports `page`, `limit`, `sort_by`, and `order` query parameters.
+Returns the authenticated user's ideas from MongoDB as a paginated, sorted, optionally filtered list. Only ideas where `userId` matches the JWT are returned — users can never see each other's ideas. Supports `page`, `limit`, `sort_by`, `order`, `status`, and `tag` query parameters. All params are optional and combinable.
 
 ### Query parameters
 
 | Param | Type | Default | Allowed values | Notes |
-|---|---|---|---|---|
+|---|---|---|---|
+---|
 | `page` | int | `1` | ≥ 1 | 1-based page number |
 | `limit` | int | `10` | 1–100 | items per page |
 | `sort_by` | string | `createdAt` | `createdAt`, `updatedAt`, `priority` | field to sort by |
 | `order` | string | `desc` | `asc`, `desc` | sort direction |
+| `status` | string | — | `raw`, `exploring`, `validated`, `building`, `shipped`, `abandoned` | filter by status (optional) |
+| `tag` | string | — | any tag string, max 50 chars | filter to ideas whose tags array contains this value (optional) |
 
 ### Response shape
 
@@ -1288,7 +1291,17 @@ Returns the authenticated user's ideas from MongoDB as a paginated, sorted list.
 | File | What changed |
 |---|---|
 | `backend/app/schemas/idea.py` | Added `IdeaListResponse` — wraps `items`, `total`, `page`, `limit` |
-| `backend/app/api/ideas.py` | Added `GET /ideas/list` route with pagination, sorting, and priority weight fix |
+| `backend/app/api/ideas.py` | Added `GET /ideas/list` route with pagination, sorting, and priority weight fix; added `status` and `tag` filter params |
+
+### How filters work
+
+`status` and `tag` are both optional. Omitting them returns all ideas. When provided, they are added directly to the MongoDB query filter:
+
+- `?status=raw` → `{"status": "raw"}` added to the filter
+- `?tag=AI` → `{"tags": "AI"}` added to the filter — MongoDB automatically matches documents where the `tags` array contains `"AI"`
+- `?status=exploring&tag=mobile` → both conditions applied, only ideas matching both are returned
+
+Filters compose cleanly with pagination and sorting — `?status=raw&tag=AI&sort_by=priority&order=desc&page=1&limit=5` is a valid request.
 
 ### How priority sorting works
 
@@ -1402,13 +1415,96 @@ curl -s "http://localhost:8000/api/ideas/list" -H "Authorization: Bearer notreal
 # → {"detail": "Invalid or expired access token"}
 ```
 
-**Step 8 — Verify via Swagger UI**
+**Step 8 — Test status filter**
+
+```bash
+# First create ideas with different statuses
+curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Raw idea", "status": "raw", "tags": ["AI"]}' > /dev/null
+
+curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Exploring idea", "status": "exploring", "tags": ["mobile"]}' > /dev/null
+
+curl -s -X POST http://localhost:8000/api/ideas/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Shipped idea", "status": "shipped", "tags": ["AI", "mobile"]}' > /dev/null
+
+# Filter by status only
+curl -s "http://localhost:8000/api/ideas/list?status=raw" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; items=json.load(sys.stdin)['items']; [print(i['title'], i['status']) for i in items]"
+# → only ideas with status="raw"
+
+curl -s "http://localhost:8000/api/ideas/list?status=exploring" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['total'], 'results')"
+```
+
+**Step 9 — Test tag filter**
+
+```bash
+# Filter by tag only
+curl -s "http://localhost:8000/api/ideas/list?tag=AI" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; items=json.load(sys.stdin)['items']; [print(i['title'], i['tags']) for i in items]"
+# → only ideas whose tags array contains "AI"
+
+curl -s "http://localhost:8000/api/ideas/list?tag=mobile" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; items=json.load(sys.stdin)['items']; [print(i['title'], i['tags']) for i in items]"
+# → ideas tagged "mobile"
+```
+
+**Step 10 — Test status + tag combined**
+
+```bash
+# Ideas that are BOTH status=shipped AND tagged AI
+curl -s "http://localhost:8000/api/ideas/list?status=shipped&tag=AI" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+# → only "Shipped idea" (matches both conditions)
+
+# status=raw AND tag=mobile — expect 0 results (no idea matches both)
+curl -s "http://localhost:8000/api/ideas/list?status=raw&tag=mobile" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['total'], 'results')"
+# → 0 results
+```
+
+**Step 11 — Test filters + sorting + pagination together**
+
+```bash
+# AI-tagged ideas, sorted by priority descending, page 1 of 2
+curl -s "http://localhost:8000/api/ideas/list?tag=AI&sort_by=priority&order=desc&page=1&limit=2" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -m json.tool
+```
+
+**Step 12 — Test invalid status value (expect 422)**
+
+```bash
+curl -s "http://localhost:8000/api/ideas/list?status=notvalid" \
+  -H "Authorization: Bearer $TOKEN"
+# → 422 Unprocessable Entity — FastAPI rejects the enum automatically
+```
+
+**Step 13 — Verify via Swagger UI**
 
 1. Open **http://localhost:8000/docs**
 2. Log in via `POST /auth/login` → copy `access_token`
 3. Click **Authorize** → paste the token
-4. Open `GET /ideas/list` → **Try it out** → set `page`, `limit`, `sort_by`, `order` → **Execute**
-5. Response should be `200` with `items`, `total`, `page`, `limit`
+4. Open `GET /ideas/list` → **Try it out**
+5. Test all four combinations:
+   - No filters (leave `status` and `tag` blank) → all ideas
+   - `status=raw` only → only raw ideas
+   - `tag=AI` only → only AI-tagged ideas
+   - `status=raw&tag=AI` → intersection of both filters
+6. Response should be `200` with `items`, `total`, `page`, `limit`
 
 ---
 

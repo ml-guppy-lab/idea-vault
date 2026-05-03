@@ -16,7 +16,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.core.security import get_current_user
 from app.db.mongodb import get_mongo_db
 from app.models.user import User
-from app.schemas.idea import IdeaCreate, IdeaListResponse, IdeaResponse, IdeaUpdate
+from app.schemas.idea import IdeaCreate, IdeaListResponse, IdeaResponse, IdeaStatus, IdeaUpdate
 
 router = APIRouter(prefix="/ideas", tags=["ideas"])
 
@@ -122,17 +122,34 @@ async def list_ideas(
         description="Sort direction: asc | desc",
     ),
 
+    # --- filter params ---
+    # Both are optional — omitting them returns all ideas for this user.
+    # They can be combined freely with each other and with pagination/sorting.
+    status: IdeaStatus | None = Query(
+        default=None,
+        description="Filter by status: raw | exploring | validated | building | shipped | abandoned",
+    ),
+    tag: str | None = Query(
+        default=None,
+        max_length=50,
+        description="Filter by tag — returns ideas whose tags array contains this exact value",
+    ),
+
     # --- auth + db dependencies ---
     current_user: User = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_mongo_db),
 ) -> IdeaListResponse:
     """
-    Return a paginated, sorted list of ideas owned by the authenticated user.
+    Return a paginated, sorted, optionally filtered list of ideas owned by the
+    authenticated user.
 
     - Only ideas where `userId == current_user.id` are returned.
     - `page` and `limit` control which slice of results to return.
     - `sort_by` accepts: createdAt, updatedAt, priority.
     - `order` accepts: asc, desc.
+    - `status` filters to ideas with that exact status value (optional).
+    - `tag` filters to ideas whose tags array contains that string (optional).
+    - All filters combine: ?status=raw&tag=AI returns raw ideas tagged AI.
     - Priority sorting uses a numeric weight (low=1, medium=2, high=3)
       because alphabetical order of the enum strings is incorrect.
     """
@@ -151,7 +168,23 @@ async def list_ideas(
         )
 
     # --- base filter: only this user's ideas ---
-    query_filter = {"userId": current_user.id}
+    query_filter: dict = {"userId": current_user.id}
+
+    # --- apply optional filters ---
+    # Each filter is only added to the query when the param was actually
+    # provided (not None). This means omitting a param has no effect on
+    # the results — it is not treated as "match None".
+
+    if status is not None:
+        # IdeaStatus is a str enum, so `status` is already the plain string
+        # value (e.g. "raw"). We store it directly — no .value needed.
+        query_filter["status"] = status
+
+    if tag is not None:
+        # MongoDB automatically matches array fields: {"tags": "mobile"}
+        # returns every document where the tags array contains "mobile".
+        # No special operator ($in, $elemMatch) is needed for a single value.
+        query_filter["tags"] = tag
 
     # --- calculate how many documents to skip for the requested page ---
     # e.g. page=2, limit=10 → skip 10 documents, return documents 11-20
