@@ -1540,6 +1540,148 @@ curl -s "http://localhost:8000/api/ideas/$IDEA_ID" \
 3. Open `GET /ideas/{idea_id}` → **Try it out** → paste a real idea id → **Execute**
 4. Expected `200` with the full idea document
 
+---
+
+## Ideas — PUT /ideas/{id} (Update Idea)
+
+### What it does
+
+Partially updates an idea owned by the authenticated user. Only fields explicitly included in the request body are modified — omitted fields are left unchanged in MongoDB. Always stamps `updatedAt` with the current UTC time on every successful update. Returns the full updated document.
+
+### Key design decisions
+
+**Why partial update (not full replace)?**
+The client might only want to change `status` from `raw` → `exploring`. Requiring the entire document forces the client to re-send all fields, risking accidental overwrites. `model_dump(exclude_unset=True)` captures only what was sent, and MongoDB's `$set` writes only those fields — the rest are untouched.
+
+**Why always update `updatedAt`?**
+Timestamps track when a document was last touched, not just when payload fields changed. If the same title is sent twice, `updatedAt` still advances — consistent with standard REST conventions.
+
+**Why re-fetch after update instead of merging in Python?**
+The response must reflect exactly what's in MongoDB. Building the response locally by merging old + new fields risks subtle drift. Re-fetching guarantees consistency.
+
+**Ownership check: 403, not 404**
+Same rule as `GET /ideas/{id}` — see that section for the full rationale.
+
+### All fields are optional in the request body
+
+| Field | Type | Notes |
+|---|---|---|
+| `title` | string | 1–200 chars if provided |
+| `description` | string or null | max 5000 chars |
+| `tags` | array of strings | same validation as POST |
+| `status` | enum | `raw`, `exploring`, `validated`, `building`, `shipped`, `abandoned` |
+| `priority` | enum | `low`, `medium`, `high` |
+
+### Files changed
+
+| File | What changed |
+|---|---|
+| `backend/app/api/ideas.py` | Added `IdeaUpdate` to imports; added `PUT /ideas/{idea_id}` route |
+
+### How to verify
+
+**Step 1 — Get a token and create an idea**
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "Secret123"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+IDEA_ID=$(curl -s -X POST http://localhost:8000/api/ideas \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Original title", "status": "raw", "priority": "low"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+echo "Idea ID: $IDEA_ID"
+```
+
+**Step 2 — Update a single field only**
+
+```bash
+curl -s -X PUT "http://localhost:8000/api/ideas/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "exploring"}' \
+  | python3 -m json.tool
+# → status is now "exploring", all other fields unchanged, updatedAt advanced
+```
+
+**Step 3 — Update multiple fields at once**
+
+```bash
+curl -s -X PUT "http://localhost:8000/api/ideas/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Updated title",
+    "priority": "high",
+    "tags": ["AI", "SaaS"]
+  }' \
+  | python3 -m json.tool
+```
+
+**Step 4 — Confirm `updatedAt` advanced but `createdAt` is unchanged**
+
+```bash
+curl -s "http://localhost:8000/api/ideas/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print('created:', d['createdAt']); print('updated:', d['updatedAt'])"
+# createdAt and updatedAt should differ
+```
+
+**Step 5 — Test 404 (nonexistent id)**
+
+```bash
+curl -s -X PUT "http://localhost:8000/api/ideas/000000000000000000000000" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Ghost"}' 
+# → {"detail": "Idea not found"}
+```
+
+**Step 6 — Test 403 (idea belongs to another user)**
+
+```bash
+# Log in as a different user (must already exist)
+TOKEN2=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "other@example.com", "password": "Other1234"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+curl -s -X PUT "http://localhost:8000/api/ideas/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN2" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Hijacked"}' 
+# → 403 {"detail": "You do not have permission to update this idea"}
+```
+
+**Step 7 — Test validation errors (422)**
+
+```bash
+# Invalid status value
+curl -s -X PUT "http://localhost:8000/api/ideas/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "notvalid"}'
+
+# Title too long
+curl -s -X PUT "http://localhost:8000/api/ideas/$IDEA_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"title\": \"$(python3 -c 'print(\"x\"*201)')\"}"
+```
+
+**Step 8 — Verify via Swagger UI**
+
+1. Open **http://localhost:8000/docs**
+2. Authorize with your access token
+3. Open `PUT /ideas/{idea_id}` → **Try it out**
+4. Paste the idea id and a partial body (e.g. `{"priority": "high"}`)
+5. Expected `200` with the full updated idea document
+
+
 
 
 

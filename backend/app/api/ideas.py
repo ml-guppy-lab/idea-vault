@@ -15,7 +15,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.core.security import get_current_user
 from app.db.mongodb import get_mongo_db
 from app.models.user import User
-from app.schemas.idea import IdeaCreate, IdeaListResponse, IdeaResponse
+from app.schemas.idea import IdeaCreate, IdeaListResponse, IdeaResponse, IdeaUpdate
 
 router = APIRouter(prefix="/ideas", tags=["ideas"])
 
@@ -293,4 +293,77 @@ async def get_idea(
 
     # --- convert ObjectId → string and return ---
     return IdeaResponse(**_serialize_idea(doc))
+
+
+@router.put(
+    "/{idea_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=IdeaResponse,
+    summary="Partially update an idea by ID",
+)
+async def update_idea(
+    idea_id: str,
+    payload: IdeaUpdate,
+    current_user: User = Depends(get_current_user),    # JWT auth gate
+    db: AsyncIOMotorDatabase = Depends(get_mongo_db),  # Motor DB dependency
+) -> IdeaResponse:
+    """
+    Partially update an idea owned by the authenticated user.
+
+    - Only fields that are explicitly provided in the request body are updated.
+      Omitted fields are left unchanged in MongoDB (true partial update via $set).
+    - Ownership is verified before any write — 403 if the idea belongs to
+      another user (same rule as GET /ideas/{id} — never 404 for existing ideas).
+    - `updatedAt` is always overwritten with the current UTC timestamp on any
+      successful update, even if no other fields actually changed.
+    - Returns the full updated document after the write.
+    """
+
+    # --- convert string id → ObjectId (raises 404 if format is invalid) ---
+    oid = _parse_object_id(idea_id)
+
+    # --- fetch the existing document to check it exists and is owned by caller ---
+    doc = await db.ideas.find_one({"_id": oid})
+
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Idea not found",
+        )
+
+    # --- ownership check: 403 if the idea belongs to someone else ---
+    # Returning 403 (not 404) is intentional — see GET /ideas/{id} for rationale.
+    if doc["userId"] != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to update this idea",
+        )
+
+    # --- build the $set payload from only the fields the client sent ---
+    # model_dump(exclude_unset=True) returns only fields that were explicitly
+    # included in the request JSON — omitted Optional fields are NOT included.
+    # We additionally filter out None values because Swagger UI pre-fills the
+    # request body with null for every optional field. Without this filter,
+    # sending {"status": "exploring"} via Swagger would also write null to
+    # title, description, tags, and priority — overwriting existing data.
+    # Result: only fields with a real (non-None) value are written to MongoDB.
+    updates = {
+        k: v
+        for k, v in payload.model_dump(exclude_unset=True).items()
+        if v is not None
+    }
+
+    # --- always stamp updatedAt, even if no other field changed ---
+    updates["updatedAt"] = datetime.now(timezone.utc)
+
+    # --- apply the update with $set — only the specified fields are written ---
+    # $set never deletes other fields; it is a true partial update.
+    await db.ideas.update_one({"_id": oid}, {"$set": updates})
+
+    # --- fetch the updated document and return it ---
+    # We re-fetch rather than merge locally so the response reflects exactly
+    # what MongoDB persisted (consistent with POST /ideas behaviour).
+    updated = await db.ideas.find_one({"_id": oid})
+
+    return IdeaResponse(**_serialize_idea(updated))
 
