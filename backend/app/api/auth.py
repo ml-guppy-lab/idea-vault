@@ -240,6 +240,11 @@ async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)):
     return AccessToken(access_token=new_access_token)
 
 
+@router.get("/me", response_model=UserRead)
+async def me(current_user: User = Depends(get_current_user)):
+    return current_user
+
+
 @router.post("/logout", status_code=status.HTTP_200_OK)
 async def logout(
     payload: LogoutRequest,
