@@ -138,3 +138,21 @@
 .auth-card-enter {
   animation: auth-fade-in 0.5s ease forwards;
 }
+
+/* Logo gradient text — driven by .dark class on <html> for clean repaints */
+.logo-text {
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  background: linear-gradient(135deg, #2d5766, #1e404b);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.dark .logo-text {
+  background: linear-gradient(135deg, #c0a0f0, #7dd3fc);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}

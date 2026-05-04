@@ -325,17 +325,7 @@ export default function Navbar({ user }: NavbarProps) {
             }}
           >
             <img src="/logo1.jpeg" alt="Idea Vault" style={{ width: 32, height: 32, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />
-            <span
-              style={{
-                fontSize: "1.4rem",
-                fontWeight: 700,
-                letterSpacing: "-0.3px",
-                background: logoGrad,
-                WebkitBackgroundClip: "text",
-                WebkitTextFillColor: "transparent",
-                backgroundClip: "text",
-              }}
-            >
+            <span className="logo-text">
               Idea Vault
             </span>
           </Link>
@@ -566,11 +556,8 @@ export default function Navbar({ user }: NavbarProps) {
                 style={{
                   fontSize: "1.3rem",
                   fontWeight: 700,
-                  background: logoGrad,
-                  WebkitBackgroundClip: "text",
-                  WebkitTextFillColor: "transparent",
-                  backgroundClip: "text",
                 }}
+                className="logo-text"
               >
                 Idea Vault
               </span>
