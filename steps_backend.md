@@ -139,6 +139,10 @@ docker-compose down
 docker-compose down -v
 ```
 
+```bash
+docker compose up --build #build and run all services
+```
+
 ---
 
 ## MongoDB — Compass Connection
