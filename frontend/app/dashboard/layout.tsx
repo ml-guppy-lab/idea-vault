@@ -6,9 +6,11 @@ async function getUser() {
   const token = cookieStore.get("access_token")?.value;
   if (!token) return null;
 
+  const api = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+
   try {
     const res = await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL}/auth/me`,
+      `${api}/auth/me`,
       {
         headers: { Authorization: `Bearer ${token}` },
         cache: "no-store",
