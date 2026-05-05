@@ -81,6 +81,11 @@ export default function NewIdeaPage() {
   }
 
   async function onSubmit(data: IdeaForm) {
+    // Flush any tag still typed but not yet committed
+    const pendingTag = tagInput.trim().replace(/,$/, "");
+    const finalTags = pendingTag
+      ? [...(data.tags ?? []), pendingTag]
+      : (data.tags ?? []);
     setSaving(true); setApiErr("");
     try {
       const res = await fetch("/api/ideas/create", {
@@ -90,7 +95,7 @@ export default function NewIdeaPage() {
           ...data,
           status:   data.status.toLowerCase(),
           priority: data.priority.toLowerCase(),
-          tags:     data.tags ?? [],
+          tags:     finalTags,
           ...(preview ? { image: preview } : {}),
         }),
       });

@@ -65,14 +65,19 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
       })
       .catch(code => { if (code === 404) setNotFound(true); })
       .finally(() => setLoading(false));
-  }, [id, reset]);
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function onSave(data: FormData) {
+    // Flush any tag still typed but not yet committed
+    const pendingTag = tagInput.trim().replace(/,$/, "");
+    const finalTags = pendingTag
+      ? [...(data.tags ?? []), pendingTag]
+      : (data.tags ?? []);
     setSaving(true); setApiErr("");
     try {
       const res = await fetch(`/api/ideas/${id}`, {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, status: data.status.toLowerCase(), priority: data.priority.toLowerCase(), tags: data.tags ?? [], ...(preview ? { image: preview } : {}) }),
+        body: JSON.stringify({ ...data, status: data.status.toLowerCase(), priority: data.priority.toLowerCase(), tags: finalTags, ...(preview ? { image: preview } : {}) }),
       });
       if (!res.ok) throw new Error();
       const d = await res.json();
@@ -156,7 +161,11 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
 
             {/* Action buttons */}
             <div style={{ display: "flex", gap: "0.8rem", marginTop: "2rem", flexWrap: "wrap" }}>
-              <button onClick={() => setEditing(true)} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.75rem 1.6rem", borderRadius: 50, border: "none", fontWeight: 600, cursor: "pointer", color: "#fff", boxShadow: "0 8px 24px rgba(0,0,0,0.15)", transition: "all 0.2s ease" }}
+              <button onClick={() => {
+                reset({ title: idea.title, description: idea.description ?? "", tags: idea.tags ?? [], status: idea.status as FormData["status"], priority: idea.priority as FormData["priority"] });
+                setTagInput("");
+                setEditing(true);
+              }} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.75rem 1.6rem", borderRadius: 50, border: "none", fontWeight: 600, cursor: "pointer", color: "#fff", boxShadow: "0 8px 24px rgba(0,0,0,0.15)", transition: "all 0.2s ease" }}
                 className="[background:linear-gradient(135deg,#3d7a8c,#1e4d5c)] dark:[background:linear-gradient(135deg,#9b7cf0,#5db8fe)] dark:[color:#0a0f1a] hover:![transform:translateY(-2px)]">
                 <Edit2 size={15} /> Edit
               </button>
