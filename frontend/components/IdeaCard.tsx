@@ -124,8 +124,8 @@ export default function IdeaCard({
               {tags.map((tag) => (
                 <span key={tag} style={{
                   padding: "0.2rem 0.6rem", borderRadius: 50, fontSize: "0.7rem",
-                  background: "rgba(255,255,255,0.6)", border: "1px solid rgba(170,200,215,0.5)",
-                }} className="dark:[background:rgba(255,255,255,0.08)] [color:#3d6678] dark:[color:#b4c8e0]">
+                  border: "1px solid rgba(170,200,215,0.5)",
+                }} className="bg-white/60 dark:bg-white/10 text-[#3d6678] dark:text-[#c8dff0]">
                   {tag}
                 </span>
               ))}
