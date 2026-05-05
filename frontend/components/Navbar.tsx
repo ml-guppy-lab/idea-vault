@@ -311,7 +311,7 @@ export default function Navbar({ user }: NavbarProps) {
           borderRadius: "0 0 24px 24px",
           transition: "background 0.35s ease, border-color 0.35s ease, box-shadow 0.35s ease",
         }}
-        className="max-[480px]:!rounded-none max-[480px]:!px-4 max-[480px]:!py-3"
+        className="max-[480px]:!rounded-none max-[480px]:!px-4 max-[480px]:!py-4"
       >
         {/* ── Section A: Logo ─────────────────────────────────────────────── */}
         <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
@@ -324,8 +324,8 @@ export default function Navbar({ user }: NavbarProps) {
               textDecoration: "none",
             }}
           >
-            <img src="/logo1.jpeg" alt="Idea Vault" style={{ width: 32, height: 32, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />
-            <span className="logo-text">
+            <img src="/logo1.jpeg" alt="Idea Vault" style={{ width: 36, height: 36, borderRadius: 10, objectFit: "cover", flexShrink: 0 }} />
+            <span className="logo-text hidden sm:inline">
               Idea Vault
             </span>
           </Link>
@@ -350,8 +350,9 @@ export default function Navbar({ user }: NavbarProps) {
         {/* ── Section C: Theme + Avatar + Hamburger ───────────────────────── */}
         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
 
-          {/* Theme toggle */}
+          {/* Theme toggle — hidden on mobile (available in hamburger menu) */}
           {mounted && (
+            <div className="hidden md:block">
             <ThemeToggleButton
               isDark={isDark}
               toggleBg={toggleBg}
@@ -359,6 +360,7 @@ export default function Navbar({ user }: NavbarProps) {
               iconColor={iconColor}
               onToggle={() => setTheme(isDark ? "light" : "dark")}
             />
+            </div>
           )}
 
           {/* Hamburger — mobile only */}
@@ -367,8 +369,8 @@ export default function Navbar({ user }: NavbarProps) {
             aria-label="Open navigation menu"
             onClick={() => setMobileOpen(true)}
             style={{
-              width: 42,
-              height: 42,
+              width: 46,
+              height: 46,
               borderRadius: "50%",
               background: toggleBg,
               border: `2px solid ${navbarBdr}`,
@@ -380,13 +382,13 @@ export default function Navbar({ user }: NavbarProps) {
               flexShrink: 0,
             }}
           >
-            <Menu size={20} />
+            <Menu size={22} />
           </button>
 
-          {/* User avatar + dropdown */}
+          {/* User avatar + dropdown — desktop only; mobile gets it via hamburger */}
           {user && (
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              {/* Logout icon — always visible on desktop */}
+            <div className="hidden md:flex" style={{ alignItems: "center", gap: "0.5rem" }}>
+              {/* Logout icon — desktop only */}
               <button
                 onClick={handleLogout}
                 disabled={loggingOut}

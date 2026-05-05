@@ -84,7 +84,7 @@ export default function IdeaCard({
         <div style={{ height: 5, background: GRADIENTS_LIGHT[idx] }} className="dark-strip" />
         <style>{`.dark .dark-strip { background: ${GRADIENTS_DARK[idx]} !important; }`}</style>
 
-        <div style={{ padding: "1.4rem" }}>
+        <div style={{ padding: "1.4rem" }} className="sm:p-[1.4rem] p-5">
           {/* Optional image */}
           {image && (
             <img src={image} alt={title} style={{
@@ -104,17 +104,17 @@ export default function IdeaCard({
 
           {/* Title */}
           <p style={{
-            fontWeight: 700, fontSize: "1.05rem", letterSpacing: "-0.2px",
+            fontWeight: 700, letterSpacing: "-0.2px",
             margin: "0.6rem 0 0.3rem",
-          }} className="[color:#1a3a44] dark:[color:#e6eefc]">
+          }} className="[color:#1a3a44] dark:[color:#e6eefc] text-[1.1rem] sm:text-[1.05rem]">
             {title}
           </p>
 
           {/* Description — 2-line clamp */}
           <p style={{
-            fontSize: "0.85rem", lineHeight: 1.5, margin: "0 0 0.75rem",
+            lineHeight: 1.55, margin: "0 0 0.75rem",
             display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
-          }} className="[color:#3d6678] dark:[color:#b4c8e0]">
+          }} className="[color:#3d6678] dark:[color:#b4c8e0] text-[0.9rem] sm:text-[0.85rem]">
             {description}
           </p>
 
@@ -124,8 +124,8 @@ export default function IdeaCard({
               {tags.map((tag) => (
                 <span key={tag} style={{
                   padding: "0.2rem 0.6rem", borderRadius: 50, fontSize: "0.7rem",
-                  background: "rgba(255,255,255,0.6)", border: "1px solid rgba(170,200,215,0.5)",
-                }} className="dark:[background:rgba(255,255,255,0.08)] [color:#3d6678] dark:[color:#b4c8e0]">
+                  border: "1px solid rgba(170,200,215,0.5)",
+                }} className="bg-white/60 dark:bg-white/10 text-[#3d6678] dark:text-[#c8dff0]">
                   {tag}
                 </span>
               ))}

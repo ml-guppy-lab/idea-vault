@@ -25,11 +25,11 @@ const inputStyle: React.CSSProperties = {
   padding: "0.9rem 1.3rem",
   borderRadius: 50,
   border: "2px solid rgba(170, 200, 215, 0.5)",
-  background: "rgba(255, 255, 255, 0.6)",
+  background: "rgba(255, 255, 255, 0.85)",
   backdropFilter: "blur(10px)",
   WebkitBackdropFilter: "blur(10px)",
   fontSize: "0.95rem",
-  color: "inherit",
+  color: "#1a3a44",
   outline: "none",
   transition: "border-color 0.2s ease, box-shadow 0.2s ease",
   boxSizing: "border-box",
@@ -58,11 +58,6 @@ function AuthInput({
         style={{ ...inputStyle, ...(focused ? inputFocusStyle : {}) }}
         className="
           placeholder:[color:#6b8fa0]
-          dark:[background:rgba(10,16,28,0.65)]
-          dark:[border-color:rgba(100,120,170,0.35)]
-          dark:[color:#e8eef8]
-          dark:placeholder:[color:#7a8faa]
-          dark:focus:[box-shadow:0_0_0_4px_rgba(143,211,244,0.25)]
         "
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
