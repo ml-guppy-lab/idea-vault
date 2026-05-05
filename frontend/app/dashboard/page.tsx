@@ -11,10 +11,13 @@ function capPriority(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1) as "Low" | "Medium" | "High";
 }
 
+const API = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+
 async function fetchIdeas(token: string) {
   try {
     const res = await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL}/ideas/list?limit=100`,
+      `${API}/ideas/list?limit=100`,
+
       { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }
     );
     if (!res.ok) return [];
@@ -36,7 +39,7 @@ async function fetchIdeas(token: string) {
 
 async function getUser(token: string) {
   try {
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/me`, {
+    const res = await fetch(`${API}/auth/me`, {
       headers: { Authorization: `Bearer ${token}` }, cache: "no-store",
     });
     if (!res.ok) return "there";
