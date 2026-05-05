@@ -24,10 +24,10 @@ const FILTERS = ["All", "Raw", "Exploring", "Validated", "Building", "Shipped", 
 
 function SkeletonGrid() {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(270px,1fr))", gap: "1.4rem", marginBottom: "1rem" }}>
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 mb-4">
       {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} style={{ height: 200, borderRadius: 22, overflow: "hidden", position: "relative" }}
-          className="[background:rgba(255,255,255,0.5)] dark:[background:rgba(20,28,45,0.5)]">
+        <div key={i} style={{ height: 220, borderRadius: 22, overflow: "hidden", position: "relative" }}
+          className="bg-white/50 dark:bg-[rgba(20,28,45,0.5)]">
           <div className="shimmer" style={{ position: "absolute", inset: 0 }} />
         </div>
       ))}
@@ -44,7 +44,7 @@ function EmptyState({ isDark }: { isDark: boolean }) {
       background: "rgba(255,255,255,0.75)", backdropFilter: "blur(16px)", borderRadius: 32,
       border: "2px dashed rgba(170,200,215,0.5)", padding: "4rem 2rem", textAlign: "center",
       boxShadow: "0 12px 32px rgba(80,120,140,0.12)",
-    }} className="dark:[background:rgba(20,28,45,0.7)]">
+    }} className="dark:bg-[rgba(20,28,45,0.7)]">
       <img src="/logo1.jpeg" alt="Idea Vault" style={{ width: 120, height: "auto", margin: "0 auto 1.5rem", borderRadius: 16, display: "block", boxShadow: "0 4px 14px rgba(0,0,0,0.1)" }} />
       <p style={{ fontSize: "1.7rem", fontWeight: 700, background: grad, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text", margin: "0 0 0.5rem" }}>
         Your vault is empty
@@ -55,16 +55,16 @@ function EmptyState({ isDark }: { isDark: boolean }) {
   );
 }
 
-// ── Shared buttons ────────────────────────────────────────────────────────────
+// ── New Idea button ────────────────────────────────────────────────────────────
 
-function NewIdeaButton() {
+function NewIdeaButton({ fullWidth = false }: { fullWidth?: boolean }) {
   const [hov, setHov] = useState(false);
   return (
-    <Link href="/dashboard/ideas/new" style={{ textDecoration: "none" }}>
+    <Link href="/dashboard/ideas/new" style={{ textDecoration: "none", display: fullWidth ? "block" : "inline-block" }}>
       <button onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} style={{
-        display: "inline-flex", alignItems: "center", gap: "0.4rem",
-        padding: "0.75rem 1.8rem", borderRadius: 50, border: "none", fontWeight: 700, fontSize: "0.9rem",
-        color: "#fff", cursor: "pointer",
+        display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "0.4rem",
+        padding: "0.75rem 1.8rem", borderRadius: 50, border: "none", fontWeight: 700, fontSize: "0.95rem",
+        color: "#fff", cursor: "pointer", width: fullWidth ? "100%" : "auto",
         boxShadow: hov ? "0 14px 32px rgba(0,0,0,0.3)" : "0 8px 24px rgba(0,0,0,0.2)",
         transform: hov ? "translateY(-3px)" : "translateY(0)",
         transition: "all 0.25s ease",
@@ -96,14 +96,14 @@ export default function DashboardClient({ ideas, userName, loading }: {
   const isDark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
 
   return (
-    <div style={{ maxWidth: 1200, margin: "0 auto", padding: "1rem 2rem" }} className="max-[480px]:!px-4">
+    <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
 
       {/* Welcome header */}
-      <div style={{ margin: "1.5rem 0 0.5rem" }}>
-        <h1 style={{ fontSize: "1.6rem", fontWeight: 600, margin: 0 }} className="logo-text">
+      <div className="mt-6 mb-2 text-center sm:text-left">
+        <h1 className="logo-text text-2xl sm:text-3xl font-semibold m-0">
           👋 Welcome back, {userName.split(" ")[0]}
         </h1>
-        <p style={{ fontSize: "0.9rem", margin: "0.3rem 0 0" }} className="[color:#6b8fa0] dark:[color:#7a8faa]">
+        <p className="text-sm sm:text-base mt-1 text-[#6b8fa0] dark:text-[#7a8faa]">
           Your ideas are waiting. Never lose a thought again.
         </p>
       </div>
@@ -111,36 +111,35 @@ export default function DashboardClient({ ideas, userName, loading }: {
       {/* Controls bar */}
       <div style={{
         background: "rgba(255,255,255,0.75)", backdropFilter: "blur(16px)",
-        borderRadius: 24, padding: "1rem 1.4rem", margin: "1.5rem 0",
+        borderRadius: 24, padding: "1rem 1.4rem", margin: "1.2rem 0",
         border: "1px solid rgba(255,255,255,0.7)", boxShadow: "0 12px 32px rgba(80,120,140,0.12)",
-        display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "1rem",
-      }} className="dark:[background:rgba(20,28,45,0.7)] dark:[border-color:rgba(180,160,240,0.25)]">
+      }} className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center justify-between gap-3 dark:bg-[rgba(20,28,45,0.7)] dark:border-[rgba(180,160,240,0.25)]">
 
         {/* Search */}
         <div style={{
-          flex: 1, maxWidth: 380, display: "flex", alignItems: "center", gap: "0.5rem",
-          padding: "0.5rem 1.3rem", borderRadius: 50,
+          display: "flex", alignItems: "center", gap: "0.5rem",
+          padding: "0.6rem 1.3rem", borderRadius: 50,
           border: `2px solid ${searchFocused ? "#8FD3F4" : "rgba(170,200,215,0.5)"}`,
           boxShadow: searchFocused ? "0 4px 12px rgba(80,120,140,0.08), 0 0 0 5px rgba(143,211,244,0.2)" : "0 4px 12px rgba(80,120,140,0.08)",
-          transition: "all 0.2s ease",
-        }} className="max-[700px]:max-w-full max-[700px]:w-full bg-white/60 dark:bg-white/10">
-          <Search size={17} color="#6b8fa0" />
+          transition: "all 0.2s ease", flex: 1,
+        }} className="bg-white/60 dark:bg-white/10 min-w-0">
+          <Search size={17} color="#6b8fa0" style={{ flexShrink: 0 }} />
           <input
             value={query} onChange={(e) => setQuery(e.target.value)}
             onFocus={() => setSearchFocused(true)} onBlur={() => setSearchFocused(false)}
             placeholder="Search your vault..."
-            style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: "0.95rem" }}
+            style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: "1rem", minWidth: 0 }}
             className="text-[#1a3a44] dark:text-[#8fafc8] placeholder:text-[#6b8fa0]"
           />
         </div>
 
-        {/* Filter pills + button */}
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem" }}>
+        {/* Filter pills */}
+        <div className="flex flex-wrap gap-2 items-center">
           {FILTERS.slice(0, 5).map((f) => {
             const active = filter === f;
             return (
               <button key={f} onClick={() => setFilter(f)} style={{
-                padding: "0.45rem 1.1rem", borderRadius: 50, fontSize: "0.82rem",
+                padding: "0.5rem 1.1rem", borderRadius: 50, fontSize: "0.85rem",
                 fontWeight: active ? 600 : 500, border: active ? "2px solid transparent" : "2px solid rgba(170,200,215,0.5)",
                 background: active ? "linear-gradient(135deg,#A8E6CF,#7ecbf0,#C7CEEA)" : "rgba(255,255,255,0.6)",
                 color: "#3d6678", cursor: "pointer",
@@ -151,7 +150,11 @@ export default function DashboardClient({ ideas, userName, loading }: {
               </button>
             );
           })}
-          <NewIdeaButton />
+        </div>
+
+        {/* New Idea button — full width on mobile */}
+        <div className="w-full sm:w-auto">
+          <NewIdeaButton fullWidth />
         </div>
       </div>
 
@@ -161,9 +164,12 @@ export default function DashboardClient({ ideas, userName, loading }: {
       ) : filtered.length === 0 && query === "" && filter === "All" ? (
         <EmptyState isDark={isDark} />
       ) : filtered.length === 0 ? (
-        <p style={{ color: "#6b8fa0", textAlign: "center", padding: "3rem" }}>No ideas match your search.</p>
+        <div className="text-center py-16">
+          <p className="text-[#6b8fa0] text-lg">No ideas match your search.</p>
+          <p className="text-[#6b8fa0] text-sm mt-1 opacity-70">Try a different keyword or filter.</p>
+        </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(270px,1fr))", gap: "1.4rem", marginBottom: "1rem" }}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 mb-4">
           {filtered.map((idea, i) => (
             <IdeaCard key={idea.id} {...idea} gradientIndex={i} />
           ))}
@@ -171,10 +177,11 @@ export default function DashboardClient({ ideas, userName, loading }: {
       )}
 
       {/* Footer */}
-      <div style={{ textAlign: "center", padding: "1.8rem", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
+      <div className="text-center py-8 flex items-center justify-center gap-2">
         <div style={{ width: 20, height: 20, borderRadius: 6, background: "linear-gradient(135deg,#A8E6CF,#7ecbf0,#C7CEEA)", boxShadow: "0 2px 8px rgba(0,0,0,0.15)", flexShrink: 0 }} />
-        <span style={{ fontSize: "0.78rem", color: "#6b8fa0", opacity: 0.7, fontWeight: 500 }}>Built by The ML Guppy</span>
+        <span className="text-xs text-[#6b8fa0] opacity-70 font-medium">Built by The ML Guppy</span>
       </div>
     </div>
   );
 }
+
