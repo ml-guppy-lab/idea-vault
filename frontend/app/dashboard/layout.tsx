@@ -17,14 +17,14 @@ async function getUser() {
       }
     );
     if (!res.ok) return null;
-    const data = await res.json() as { id: string; email: string };
-    // Derive a display name from the email (e.g. "sonal.kumari@example.com" → "Sonal Kumari")
-    const username = data.email.split("@")[0];
-    const name = username
-      .split(/[._-]/)
-      .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(" ");
-    return { name, email: data.email };
+    const data = await res.json() as { id: string; email: string; display_name?: string | null; avatar_url?: string | null };
+    // Use display_name if set, otherwise derive from email
+    const name = data.display_name?.trim() ||
+      data.email.split("@")[0]
+        .split(/[._-]/)
+        .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(" ");
+    return { name, email: data.email, avatarUrl: data.avatar_url ?? undefined };
   } catch {
     return null;
   }

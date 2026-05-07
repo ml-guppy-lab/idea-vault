@@ -6,7 +6,6 @@ import { useRouter, usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
   LayoutDashboard,
-  Compass,
   Settings,
   Sun,
   Moon,
@@ -30,9 +29,9 @@ interface NavbarProps {
 // ── Nav links ─────────────────────────────────────────────────────────────────
 
 const NAV_LINKS = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Explore",   href: "/explore",   icon: Compass },
-  { label: "Settings",  href: "/settings",  icon: Settings },
+  { label: "Dashboard", href: "/dashboard",          icon: LayoutDashboard },
+  { label: "Profile",   href: "/dashboard/profile",  icon: User },
+  { label: "Settings",  href: "/dashboard/settings", icon: Settings },
 ];
 
 // ── Navbar ────────────────────────────────────────────────────────────────────
@@ -325,7 +324,7 @@ export default function Navbar({ user }: NavbarProps) {
             }}
           >
             <img src="/logo1.jpeg" alt="Idea Vault" style={{ width: 36, height: 36, borderRadius: 10, objectFit: "cover", flexShrink: 0 }} />
-            <span className="logo-text hidden sm:inline">
+            <span className="logo-text">
               Idea Vault
             </span>
           </Link>
@@ -338,10 +337,7 @@ export default function Navbar({ user }: NavbarProps) {
         </div>
 
         {/* ── Section B: Nav links (desktop) ──────────────────────────────── */}
-        <div
-          style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}
-          className="hidden md:flex"
-        >
+        <div className="hidden md:flex items-center gap-1">
           {NAV_LINKS.map((l) => (
             <NavLink key={l.href} {...l} />
           ))}
@@ -456,12 +452,12 @@ export default function Navbar({ user }: NavbarProps) {
                   <DropdownItem
                     icon={User}
                     label="My Profile"
-                    onClick={() => { setDropdownOpen(false); router.push("/profile"); }}
+                    onClick={() => { setDropdownOpen(false); router.push("/dashboard/profile"); }}
                   />
                   <DropdownItem
                     icon={Settings}
                     label="Settings"
-                    onClick={() => { setDropdownOpen(false); router.push("/settings"); }}
+                    onClick={() => { setDropdownOpen(false); router.push("/dashboard/settings"); }}
                   />
 
                   <div style={{ height: 1, background: dividerClr, margin: "0.4rem" }} />
