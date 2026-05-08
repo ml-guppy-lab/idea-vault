@@ -149,3 +149,151 @@ cd frontend && npm run dev # frontend with hot-reload on :3000 (or :3001 if 3000
 ```
 
 > If `npm run dev` starts on port 3001, update `FRONTEND_URL=http://localhost:3001` in `backend/.env` and restart uvicorn — otherwise Google OAuth redirects back to the wrong port.
+
+---
+
+## Step 9 — Dashboard (Server + Client)
+
+**Files:**
+- `app/dashboard/page.tsx` — server component: fetches ideas + user in parallel via `INTERNAL_API_URL`, passes to client
+- `components/DashboardClient.tsx` — client component: search, filter pills, responsive card grid, empty state, skeleton loader
+- `components/IdeaCard.tsx` — reusable idea card with glassmorphism, status/priority badges, tags, dark mode
+
+**API call:** `GET /ideas/list?limit=100` — server-side with Bearer token from httpOnly cookie.
+
+**Search & Filter:** client-side `useMemo` over all fetched ideas — no extra API calls. Filter by status, search across title + description + tags.
+
+**Responsive grid:** `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`
+
+---
+
+## Step 10 — Create Idea Page (`/dashboard/ideas/new`)
+
+**File:** `app/dashboard/ideas/new/page.tsx` — client component.
+
+**API proxy:** `app/api/ideas/create/route.ts` — server route reads `access_token` cookie, forwards to backend with Bearer header.
+
+**Tag handling:** tags entered comma-separated; pending tag flushed at submit time so the last tag is never lost.
+
+**Sends lowercase** status/priority to match backend enum validation.
+
+---
+
+## Step 11 — Idea Detail / Edit / Delete (`/dashboard/ideas/[id]`)
+
+**File:** `app/dashboard/ideas/[id]/page.tsx` — client component.
+
+**API proxy:** `app/api/ideas/[id]/route.ts` — handles GET / PUT / DELETE.
+
+Key fixes applied:
+- `const { id } = use(params)` — Next.js 15+ makes page params a Promise; must use `React.use()`
+- Tags in edit mode: `reset()` called explicitly on Edit button click (not in `useEffect`) to avoid stale state
+- Pending `tagInput` flushed before PUT so last tag is never lost
+- Delete uses shadcn `AlertDialog` for confirmation → `DELETE /ideas/delete/{id}` → redirect to `/dashboard`
+
+---
+
+## Step 12 — Docker Networking Fix
+
+`NEXT_PUBLIC_API_URL` is baked at build time and works in browsers. Server-side Next.js code (API proxy routes, server components) cannot use `localhost` inside Docker — it resolves to the container's own loopback, not the backend service.
+
+**Fix:** Added `INTERNAL_API_URL=http://backend:8000/api` to `docker-compose.yml` under the `frontend` service environment.
+
+All server-side fetches use the fallback chain:
+```ts
+process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api"
+```
+
+---
+
+## Step 13 — Dark Mode Fixes
+
+**Problem:** Inline `style={{ color, background }}` always beats Tailwind className dark variants in CSS specificity.
+
+**Fix:** Moved all color/background values for dark-mode-sensitive elements to Tailwind className utilities:
+- IdeaCard tags: `className="bg-white/60 dark:bg-white/10 text-[#3d6678] dark:text-[#c8dff0]"` (no inline background)
+- Search input: `bg-white/60 dark:bg-white/10`, `text-[#1a3a44] dark:text-[#8fafc8]`
+- Auth page inputs: `color: "#1a3a44"` hardcoded inline (overrides theme inheritance intentionally)
+
+**Auth pages forced to light mode:** `app/(auth)/layout.tsx` — client layout removes `dark` class from `document.documentElement` on mount, restores on unmount.
+
+**Tailwind v4 dark variant syntax:** `@custom-variant dark (&:is(.dark *))` in `globals.css` — dark variants work via className only, never via inline `style={}`.
+
+---
+
+## Step 14 — CORS Configuration (Backend)
+
+**File:** `backend/app/main.py`
+
+```python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOWED_ORIGINS,   # ["http://localhost:3000"]
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+```
+
+`allow_origins=["*"]` is never used — locks the API to the frontend origin only.
+
+---
+
+## Step 15 — Profile Page (`/dashboard/profile`)
+
+**Backend changes:**
+- `models/user.py` — added columns: `display_name`, `bio`, `gender`, `date_of_birth`, `avatar_url`
+- `db/postgres.py` — idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` migrations run at startup (no Alembic needed for v1)
+- `schemas/user.py` — added `ProfileRead`, `ProfileUpdate`, `AvatarUpload`, `ChangePasswordRequest`
+- `api/profile.py` — new router: `GET/PATCH /profile/me`, `POST /profile/avatar`, `POST /profile/change-password`
+- `main.py` — registered profile router at `/api`
+
+**Frontend files:**
+- `app/api/profile/route.ts` — proxy: GET + PATCH
+- `app/api/profile/avatar/route.ts` — proxy: POST avatar (base64 data URL)
+- `app/api/profile/change-password/route.ts` — proxy: POST change-password
+- `app/dashboard/profile/page.tsx` — full profile page
+
+**Profile page sections:**
+1. **Avatar** — upload photo (converted to base64 data URL client-side, max 3 MB), preview shown immediately
+2. **Personal info** — display name, bio (500 chars), gender (enum), date of birth, email (read-only)
+3. **Change password** — current password + new password + confirm; hidden entirely for Google OAuth users
+
+**Password change security:**
+- Current password verified with bcrypt before accepting new one
+- Same strength rules as registration (8+ chars, 1 uppercase, 1 number)
+- On success: **all refresh tokens revoked** in DB → forces re-login on every device
+- Frontend redirects to `/login` after 2.5 s
+- Google OAuth users: section hidden in UI; backend also hard-blocks the endpoint
+
+**Dashboard layout update:** `app/dashboard/layout.tsx` now passes `display_name` and `avatar_url` from `/auth/me` to Navbar so the avatar shows the uploaded photo.
+
+---
+
+## Step 16 — Settings Page (`/dashboard/settings`)
+
+**File:** `app/dashboard/settings/page.tsx`
+
+Sections:
+- **Appearance** — Light / Dark theme toggle (persisted by `next-themes`)
+- **About** — App name, version, tagline
+
+---
+
+## Step 17 — Navbar Responsive Fixes
+
+**Changes to `components/Navbar.tsx`:**
+
+- **Mobile:** only logo + "Idea Vault" text + hamburger visible. Everything else hidden.
+- **Desktop:** full nav bar with links, theme toggle, avatar + dropdown.
+- Removed `Explore` link and nav entry entirely.
+- Nav links section B: replaced `style={{ display: "flex" }}` + `className="hidden md:flex"` with pure `className="hidden md:flex items-center gap-1"` — inline style was overriding the `hidden` class.
+- Avatar + dropdown wrapper: `className="hidden md:flex"` — hidden on mobile.
+- Hamburger panel contains: Dashboard, Profile, Settings links + theme toggle + user info + logout.
+- "Idea Vault" logo text: always visible (removed `hidden sm:inline`).
+
+**Horizontal scroll fix:**
+- `app/layout.tsx` body: `overflow-x-hidden`
+- `app/layout.tsx` html element: `overflow-x-hidden`
+- Both needed — html is the scroll root, body alone is insufficient.
+
