@@ -1,6 +1,9 @@
 import json
 
 from pydantic import field_validator
+import json
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,7 +37,19 @@ class Settings(BaseSettings):
 
     # Rate limiting (applied to /auth/login and /auth/register)
     RATE_LIMIT_MAX_ATTEMPTS: int = 5    # max requests allowed per window
-    RATE_LIMIT_WINDOW_SECONDS: int = 900  # 15 minutes in seconds
+    RATE_LIMIT_WINDOW_SECONDS: int = 900  # 15 minutes in 
+
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def parse_allowed_origins(cls, v: object) -> list[str]:
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            v = v.strip()
+            if v.startswith("["):
+                return json.loads(v)
+            return [o.strip() for o in v.split(",") if o.strip()]
+        return vseconds
 
     # CORS
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
