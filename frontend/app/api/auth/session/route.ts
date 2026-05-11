@@ -14,18 +14,18 @@ const COOKIE_BASE = {
 
 /**
  * POST /api/auth/session
- * Body: { access_token: string, refresh_token: string }
+ * Body: { access_token: string }
  *
- * Sets both tokens as httpOnly cookies so JavaScript on the page can never
- * read them (XSS mitigation). Only this server-side route handler can set
- * or clear the cookies.
+ * Sets the access_token as an httpOnly cookie.  The refresh_token is handled
+ * separately — it is set by FastAPI via Set-Cookie and re-issued on the
+ * frontend domain by /api/auth/login or /api/auth/oauth-token.
  */
 export async function POST(req: NextRequest) {
-  const body = await req.json() as { access_token?: string; refresh_token?: string };
-  const { access_token, refresh_token } = body;
+  const body = await req.json() as { access_token?: string };
+  const { access_token } = body;
 
-  if (!access_token || !refresh_token) {
-    return NextResponse.json({ error: "Missing tokens" }, { status: 400 });
+  if (!access_token) {
+    return NextResponse.json({ error: "Missing access_token" }, { status: 400 });
   }
 
   const res = NextResponse.json({ ok: true });
@@ -33,11 +33,6 @@ export async function POST(req: NextRequest) {
   res.cookies.set("access_token", access_token, {
     ...COOKIE_BASE,
     maxAge: ACCESS_MAX_AGE,
-  });
-
-  res.cookies.set("refresh_token", refresh_token, {
-    ...COOKIE_BASE,
-    maxAge: REFRESH_MAX_AGE,
   });
 
   return res;

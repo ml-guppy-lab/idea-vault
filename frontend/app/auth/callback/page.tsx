@@ -4,17 +4,19 @@
  * /auth/callback — Google OAuth callback handler
  *
  * The backend redirects here after completing the Google OAuth flow:
- *   GET /auth/callback?access_token=<jwt>&refresh_token=<opaque>
+ *   GET /auth/callback?code=<one-time-uuid>
+ *
+ * The opaque code (stored in Redis, 60-second TTL) is exchanged for real
+ * auth tokens via a server-to-server call in /api/auth/oauth-token.
+ * Tokens are set as httpOnly cookies — they never touch browser JavaScript.
  *
  * This page:
- *   1. Reads both tokens from the URL query string.
- *   2. POSTs them to /api/auth/session (our Next.js server route) which sets
- *      them as httpOnly cookies — JS on the page never touches the token values.
- *   3. Replaces the URL (strips the tokens from browser history / address bar).
+ *   1. Reads the one-time code from the URL query string.
+ *   2. POSTs the code to /api/auth/oauth-token (Next.js server route).
+ *   3. That route calls FastAPI, gets tokens, sets httpOnly cookies.
  *   4. Redirects to /dashboard.
  *
- * If tokens are missing or the session route fails, the user is sent to /login
- * with an error message in the query string.
+ * If the code is missing or exchange fails, sends to /login with an error.
  */
 
 import { useEffect } from "react";
@@ -26,25 +28,26 @@ function CallbackHandler() {
   const searchParams = useSearchParams();
 
   useEffect(() => {
-    const access_token  = searchParams.get("access_token");
-    const refresh_token = searchParams.get("refresh_token");
+    const code = searchParams.get("code");
 
-    if (!access_token || !refresh_token) {
+    if (!code) {
       router.replace("/login?error=oauth_failed");
       return;
     }
 
-    // Strip tokens from the URL immediately so they don't linger in history.
+    // Strip the code from the URL — it's one-time-use and short-lived,
+    // but there's no reason to leave it visible in the address bar.
     window.history.replaceState({}, "", "/auth/callback");
 
-    // Hand the tokens to the server-side route which sets httpOnly cookies.
-    fetch("/api/auth/session", {
-      method: "POST",
+    // Exchange the one-time code for tokens via the Next.js BFF route.
+    // FastAPI deletes the code from Redis immediately (replay-safe).
+    fetch("/api/auth/oauth-token", {
+      method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ access_token, refresh_token }),
+      body:    JSON.stringify({ code }),
     })
       .then((res) => {
-        if (!res.ok) throw new Error("session store failed");
+        if (!res.ok) throw new Error("token exchange failed");
         router.replace("/dashboard");
       })
       .catch(() => {

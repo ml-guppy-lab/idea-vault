@@ -107,24 +107,8 @@ class ChangePasswordRequest(BaseModel):
         return v
 
 
-class Token(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-
-
-class RefreshRequest(BaseModel):
-    # The opaque refresh token string returned by /login
-    refresh_token: str
-
-
 class AccessToken(BaseModel):
-    # Returned by /refresh — only a new access token, refresh token is unchanged
+    # Returned by /login, /refresh, and OAuth token exchange.
+    # The refresh_token is never in the JSON body — it travels via Set-Cookie.
     access_token: str
     token_type: str = "bearer"
-
-
-class LogoutRequest(BaseModel):
-    # The specific refresh token to revoke — allows targeted logout per device
-    # without affecting sessions on other devices
-    refresh_token: str

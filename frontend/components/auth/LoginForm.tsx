@@ -90,33 +90,31 @@ export default function LoginForm() {
   const onSubmit = async (values: LoginFormValues) => {
     setApiError(null);
     try {
-      const res = await api.post<{ access_token: string; refresh_token: string }>(
-        "/auth/login",
-        { email: values.email, password: values.password }
-      );
-      // Store tokens in httpOnly cookies via a Next.js server route — never in
-      // localStorage (vulnerable to XSS) or readable JS cookies.
-      await fetch("/api/auth/session", {
-        method: "POST",
+      // Call the Next.js BFF login proxy — never FastAPI directly.
+      // The proxy sets access_token + refresh_token as httpOnly cookies
+      // and returns { ok: true }. No token ever reaches browser JavaScript.
+      const res = await fetch("/api/auth/login", {
+        method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          access_token: res.data.access_token,
-          refresh_token: res.data.refresh_token,
-        }),
+        body:    JSON.stringify({ email: values.email, password: values.password }),
       });
-      router.push("/dashboard");
-    } catch (err: unknown) {
-      const detail =
-        (err as { response?: { data?: { detail?: string | { msg: string }[] } } })
-          ?.response?.data?.detail;
 
-      if (Array.isArray(detail)) {
-        setApiError(detail.map((d) => d.msg).join(" · "));
-      } else if (typeof detail === "string") {
-        setApiError(detail);
-      } else {
-        setApiError("Something went wrong. Please try again.");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { detail?: string | { msg: string }[] };
+        const detail = data?.detail;
+        if (Array.isArray(detail)) {
+          setApiError(detail.map((d) => d.msg).join(" · "));
+        } else if (typeof detail === "string") {
+          setApiError(detail);
+        } else {
+          setApiError("Something went wrong. Please try again.");
+        }
+        return;
       }
+
+      router.push("/dashboard");
+    } catch {
+      setApiError("Something went wrong. Please try again.");
     }
   };
 
