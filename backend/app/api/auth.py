@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+import pkce
 from authlib.integrations.starlette_client import OAuth
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -294,22 +295,42 @@ async def logout(
 
 @router.get("/google", include_in_schema=False)
 async def google_login(request: Request):
-    # Build the redirect URL that Google will send the browser back to after login.
-    # authlib stores a random `state` value in the session cookie here so it can
-    # verify the callback isn't forged (CSRF).
+    # Generate a PKCE code_verifier (128 chars, URL-safe random) and derive
+    # the S256 code_challenge.  The verifier is stored server-side in the
+    # signed session cookie — never exposed to the browser.
+    code_verifier = pkce.generate_code_verifier(length=128)
+    code_challenge = pkce.get_code_challenge(code_verifier)
+    request.session["pkce_verifier"] = code_verifier
+
+    # authlib also stores a random `state` in the session for CSRF protection.
     return await _oauth.google.authorize_redirect(
-        request, settings.GOOGLE_REDIRECT_URI
+        request,
+        settings.GOOGLE_REDIRECT_URI,
+        code_challenge=code_challenge,
+        code_challenge_method="S256",
     )
 
 
 @router.get("/google/callback", include_in_schema=False)
 async def google_callback(request: Request, db: AsyncSession = Depends(get_db)):
-    # Exchange the authorization code Google sent us for an access token + id_token.
-    # Authlib also validates the `state` from the session cookie here.
+    # Consume the PKCE verifier from the session (pop = one-time use).
+    # Absence means the request didn't originate from our /auth/google flow.
+    code_verifier = request.session.pop("pkce_verifier", None)
+    if not code_verifier:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OAuth authentication failed. Please try again.",
+        )
+
+    # Exchange the authorization code for tokens.
+    # Authlib validates `state` (CSRF) and sends `code_verifier` to Google,
+    # which re-derives the challenge and rejects any mismatch.
     try:
-        token = await _oauth.google.authorize_access_token(request)
+        token = await _oauth.google.authorize_access_token(
+            request, code_verifier=code_verifier
+        )
     except Exception:
-        # State mismatch, code already used, or any other OAuth error
+        # State mismatch, PKCE failure, code already used, or any other OAuth error
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="OAuth authentication failed. Please try again.",
