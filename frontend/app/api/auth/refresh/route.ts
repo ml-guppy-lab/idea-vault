@@ -25,11 +25,12 @@ export async function POST() {
     process.env.NEXT_PUBLIC_API_URL ||
     "http://localhost:8000/api";
 
-  // Exchange the stored refresh token for a new access token
+  // Forward the refresh token to FastAPI as a Cookie header (server-to-server).
+  // FastAPI now reads it from request.cookies, not the JSON body, so the raw
+  // token value is never returned in any response the browser can inspect.
   const backendRes = await fetch(`${apiBase}/auth/refresh`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token: refreshToken }),
+    method:  "POST",
+    headers: { "Cookie": `refresh_token=${refreshToken}` },
   });
 
   if (!backendRes.ok) {

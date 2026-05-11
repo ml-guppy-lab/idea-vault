@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
+import json
+import uuid
 
 import pkce
 from authlib.integrations.starlette_client import OAuth
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
@@ -22,7 +24,7 @@ from app.db.postgres import get_db
 from app.db.redis import get_redis
 from app.models.refresh_token import RefreshToken
 from app.models.user import AuthProvider, User
-from app.schemas.user import AccessToken, LogoutRequest, RefreshRequest, Token, UserCreate, UserLogin, UserRead
+from app.schemas.user import AccessToken, UserCreate, UserLogin, UserRead
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -46,6 +48,14 @@ _oauth.register(
         "scope": "openid email profile",
     },
 )
+
+# True in production (HTTPS), False in local development (HTTP).
+# Controls the Secure flag on Set-Cookie headers.
+_is_secure = settings.FRONTEND_URL.startswith("https://")
+
+# Refresh-token cookie lifetime in seconds — mirrors the DB token expiry.
+_REFRESH_COOKIE_MAX_AGE = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
+
 
 # ---------------------------------------------------------------------------
 # Rate limiting dependency
@@ -149,11 +159,12 @@ async def register(
     return user
 
 
-@router.post("/login", response_model=Token)
+@router.post("/login", response_model=AccessToken)
 async def login(
     payload: UserLogin,
+    response: Response,  # injected by FastAPI so we can set Set-Cookie
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(check_rate_limit),  # enforces 5 attempts per IP per 15 min
+    _: None = Depends(check_rate_limit),
 ):
     # Look up the user by email
     result = await db.execute(select(User).where(User.email == payload.email))
@@ -202,42 +213,57 @@ async def login(
         )
     )
     await db.commit()
+    
+    # Set the refresh token as an httpOnly cookie — never in the JSON body.
+    # JavaScript (and therefore XSS) cannot read httpOnly cookies.
+    response.set_cookie(
+        key="refresh_token",
+        value=raw_refresh,
+        httponly=True,
+        secure=_is_secure,
+        samesite="lax",
+        path="/",
+        max_age=_REFRESH_COOKIE_MAX_AGE,
+    )
 
-    return Token(access_token=access_token, refresh_token=raw_refresh)
+    # Return only the short-lived access token.
+    # The long-lived refresh token travels exclusively via Set-Cookie.
+    return AccessToken(access_token=access_token)
 
 
 @router.post("/refresh", response_model=AccessToken)
-async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)):
-    # Look up the refresh token in the database by its raw value
+async def refresh(request: Request, db: AsyncSession = Depends(get_db)):
+    # Read the refresh token from the httpOnly cookie.
+    # The Next.js BFF forwards it as a Cookie header in a server-to-server call
+    # so the raw value is never visible to browser JavaScript.
+    refresh_token_val = request.cookies.get("refresh_token")
+    if not refresh_token_val:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No refresh token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     result = await db.execute(
-        select(RefreshToken).where(RefreshToken.token == payload.refresh_token)
+        select(RefreshToken).where(RefreshToken.token == refresh_token_val)
     )
     record = result.scalar_one_or_none()
 
-    # Use a single generic 401 for all failure cases — don't reveal whether
-    # the token was never issued vs already expired vs belongs to someone else
     token_invalid = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or expired refresh token",
         headers={"WWW-Authenticate": "Bearer"},
     )
 
-    # Reject if the token was never stored (not issued by us)
     if not record:
         raise token_invalid
 
-    # Reject if the token has passed its expiry date
     if datetime.now(timezone.utc) > record.expires_at:
-        # Clean up the expired row — no need to keep dead tokens in the DB
         await db.delete(record)
         await db.commit()
         raise token_invalid
 
-    # Token is valid — issue a fresh short-lived JWT for the associated user.
-    # The refresh token itself is NOT rotated here; it stays alive until logout
-    # or until it naturally expires after 180 days.
     new_access_token = create_access_token(subject=record.user_id)
-
     return AccessToken(access_token=new_access_token)
 
 
@@ -248,30 +274,39 @@ async def me(current_user: User = Depends(get_current_user)):
 
 @router.post("/logout", status_code=status.HTTP_200_OK)
 async def logout(
-    payload: LogoutRequest,
-    # get_current_user validates the JWT, fetches the User row, and returns it.
-    # If the token is missing, expired, or invalid — 401 is raised automatically.
+    request: Request,
+    response: Response,
+    # JWT validation — ensures only authenticated users can revoke tokens.
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    # Find the specific refresh token AND confirm it belongs to the calling user.
-    # current_user.id is the verified identity from the JWT — prevents one user
-    # from revoking another user's session.
-    result = await db.execute(
-        select(RefreshToken).where(
-            RefreshToken.token == payload.refresh_token,
-            RefreshToken.user_id == current_user.id,
+    # Read the refresh token from the httpOnly cookie (forwarded by Next.js BFF).
+    refresh_token_val = request.cookies.get("refresh_token")
+
+    if refresh_token_val:
+        # Verify the token belongs to the authenticated user before revoking.
+        # Prevents one user from invalidating another user's session.
+        result = await db.execute(
+            select(RefreshToken).where(
+                RefreshToken.token == refresh_token_val,
+                RefreshToken.user_id == current_user.id,
+            )
         )
+        record = result.scalar_one_or_none()
+        if record:
+            await db.delete(record)
+            await db.commit()
+
+    # Instruct the browser to expire the refresh_token cookie.
+    # The Next.js BFF also clears its own copy of the cookie.
+    response.delete_cookie(
+        key="refresh_token",
+        path="/",
+        secure=_is_secure,
+        httponly=True,
+        samesite="lax",
     )
-    record = result.scalar_one_or_none()
-
-    if record:
-        # Delete only this specific token — other sessions on other devices are unaffected
-        await db.delete(record)
-        await db.commit()
-
-    # Always return 200, even if the token wasn't found.
-    # Idempotent logout: calling this twice should not be an error from the client's perspective.
+    # Idempotent — always 200, even if the token was already revoked.
     return {"message": "Logged out successfully"}
 
 
@@ -312,7 +347,11 @@ async def google_login(request: Request):
 
 
 @router.get("/google/callback", include_in_schema=False)
-async def google_callback(request: Request, db: AsyncSession = Depends(get_db)):
+async def google_callback(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+):
     # Consume the PKCE verifier from the session (pop = one-time use).
     # Absence means the request didn't originate from our /auth/google flow.
     code_verifier = request.session.pop("pkce_verifier", None)
@@ -391,12 +430,52 @@ async def google_callback(request: Request, db: AsyncSession = Depends(get_db)):
     )
     await db.commit()
 
-    # Redirect the browser to the frontend callback page with both tokens in the
-    # query string. The frontend reads them from the URL and stores them in memory
-    # or localStorage, then strips them from the URL bar.
-    redirect_url = (
-        f"{settings.FRONTEND_URL}/auth/callback"
-        f"?access_token={access_token}"
-        f"&refresh_token={raw_refresh}"
+    # Store both tokens in Redis under a one-time UUID code (60-second TTL).
+    # The redirect URL carries only the opaque code — no tokens in the URL,
+    # so they never appear in browser history, server logs, or referrer headers.
+    # The Next.js BFF exchanges the code for tokens in a server-to-server call.
+    oauth_code = str(uuid.uuid4())
+    await redis.setex(
+        f"oauth_code:{oauth_code}",
+        60,  # 60-second TTL — just long enough to survive the redirect handshake
+        json.dumps({"access_token": access_token, "refresh_token": raw_refresh}),
     )
-    return RedirectResponse(url=redirect_url)
+    return RedirectResponse(
+        url=f"{settings.FRONTEND_URL}/auth/callback?code={oauth_code}"
+    )
+
+
+@router.get("/google/token", include_in_schema=False)
+async def google_token(
+    code: str,
+    response: Response,
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    """Exchange a short-lived one-time OAuth code for auth tokens.
+
+    Called server-to-server by the Next.js BFF — never directly by the browser.
+    Consumes the code on first use (prevents replay). Sets refresh_token as an
+    httpOnly cookie and returns access_token in the response body.
+    """
+    redis_key = f"oauth_code:{code}"
+    data_raw = await redis.get(redis_key)
+    if not data_raw:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired OAuth code.",
+        )
+
+    # Delete before returning — one-time use prevents replay attacks.
+    await redis.delete(redis_key)
+    data = json.loads(data_raw)
+
+    response.set_cookie(
+        key="refresh_token",
+        value=data["refresh_token"],
+        httponly=True,
+        secure=_is_secure,
+        samesite="lax",
+        path="/",
+        max_age=_REFRESH_COOKIE_MAX_AGE,
+    )
+    return AccessToken(access_token=data["access_token"])

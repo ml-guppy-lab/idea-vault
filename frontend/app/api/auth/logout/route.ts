@@ -19,16 +19,18 @@ export async function POST() {
     process.env.NEXT_PUBLIC_API_URL ||
     "http://localhost:8000/api";
 
-  // Revoke the refresh token in the DB — best effort, don't block logout if it fails
+  // Revoke the refresh token in the DB — best effort, don't block logout if it fails.
+  // Forward it as a Cookie header (server-to-server); FastAPI reads from request.cookies.
   if (refreshToken) {
     try {
       await fetch(`${apiBase}/auth/logout`, {
-        method: "POST",
+        method:  "POST",
         headers: {
-          "Content-Type": "application/json",
+          // FastAPI reads refresh_token from the Cookie header, not the body.
+          "Cookie": `refresh_token=${refreshToken}`,
+          // JWT still required — get_current_user validates it server-side.
           ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },
-        body: JSON.stringify({ refresh_token: refreshToken }),
       });
     } catch {
       // Backend unreachable — still clear cookies locally
