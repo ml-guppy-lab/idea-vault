@@ -84,35 +84,12 @@ export default function Navbar({ user }: NavbarProps) {
   const handleLogout = useCallback(async () => {
     setLoggingOut(true);
     try {
-      // Revoke refresh token on backend
-      const refreshToken = document.cookie
-        .split("; ")
-        .find((c) => c.startsWith("refresh_token="))
-        ?.split("=")?.[1];
-
-      if (refreshToken) {
-        const accessToken = document.cookie
-          .split("; ")
-          .find((c) => c.startsWith("access_token="))
-          ?.split("=")?.[1];
-
-        await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/auth/logout`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-            },
-            body: JSON.stringify({ refresh_token: refreshToken }),
-          }
-        );
-      }
+      // Server route reads the httpOnly refresh token cookie (JS can't see it),
+      // revokes it on the backend, then clears both auth cookies.
+      await fetch("/api/auth/logout", { method: "POST" });
     } catch {
-      // If backend call fails, still clear cookies and redirect
+      // If the call fails, cookies are still cleared on the next line
     } finally {
-      // Clear httpOnly cookies via our server route
-      await fetch("/api/auth/session", { method: "DELETE" });
       router.push("/login");
     }
   }, [router]);
