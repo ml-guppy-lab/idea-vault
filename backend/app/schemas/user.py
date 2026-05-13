@@ -40,6 +40,7 @@ class UserRead(BaseModel):
     display_name: Optional[str] = None
     avatar_url: Optional[str] = None
     auth_provider: str = "local"
+    email_verified: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -56,6 +57,30 @@ class ProfileRead(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        if not re.search(r"[A-Z]", v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not re.search(r"[0-9]", v):
+            raise ValueError("Password must contain at least one number")
+        return v
 
 
 class ProfileUpdate(BaseModel):

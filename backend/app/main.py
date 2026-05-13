@@ -1,6 +1,32 @@
 from contextlib import asynccontextmanager
+import logging
+import sys
 
 from fastapi import FastAPI
+
+# ---------------------------------------------------------------------------
+# Logging — must be configured BEFORE uvicorn loads.
+#
+# Uvicorn calls logging.config.dictConfig() at startup which replaces the root
+# logger's handlers. Any logger that relies on root propagation (including
+# app.services.email_service) ends up with no handler and silently drops logs.
+#
+# Fix: give the "app" namespace its own StreamHandler pointing to stdout so it
+# works regardless of what uvicorn does to the root logger.
+# ---------------------------------------------------------------------------
+_app_log = logging.getLogger("app")
+if not _app_log.handlers:
+    _h = logging.StreamHandler(sys.stdout)
+    _h.setFormatter(
+        logging.Formatter(
+            "%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    _app_log.addHandler(_h)
+    _app_log.setLevel(logging.DEBUG)  # DEBUG in dev; raise to INFO in prod
+    _app_log.propagate = False  # avoid double-printing via root
+
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -22,6 +48,15 @@ async def lifespan(app: FastAPI):
     await connect_to_redis()
     await connect_to_mongo()
     await init_db()
+
+    # Log email config at startup so misconfiguration is immediately visible.
+    _app_log.info("Email sender : %s", settings.EMAIL_FROM)
+    _app_log.info(
+        "Email override: %s",
+        settings.EMAIL_OVERRIDE_TO or "(none — emails sent to real recipients)",
+    )
+    _app_log.info("Resend API key set: %s", bool(settings.RESEND_API_KEY))
+
     yield
     await close_redis_connection()
     await close_mongo_connection()

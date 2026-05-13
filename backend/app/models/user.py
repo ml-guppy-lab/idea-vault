@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 
 from sqlalchemy import Boolean, Date, DateTime, Enum, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
+from datetime import datetime
 
 from app.db.postgres import Base
 
@@ -43,3 +44,20 @@ class User(Base):
     gender: Mapped[str | None] = mapped_column(String(30), nullable=True)
     date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Email verification — set to True when the user clicks the link in their inbox.
+    # Google OAuth users are pre-verified (Google already verified their email).
+    email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # SHA-256 hash of the one-time email verification token (raw token sent in link).
+    # Storing the hash (not plaintext) means a DB dump cannot be used to verify emails.
+    verification_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    verification_token_expires: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # SHA-256 hash of the one-time password-reset token. Same rationale as above.
+    reset_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reset_token_expires: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

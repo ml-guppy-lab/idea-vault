@@ -20,7 +20,6 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import api from "@/lib/api";
 import GoogleButton from "./GoogleButton";
@@ -108,8 +107,11 @@ function AuthInput({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function SignupForm() {
-  const router = useRouter();
+  // When non-null, the form is replaced by the "check your email" screen.
+  const [registeredEmail, setRegisteredEmail] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
+  // State for the "resend" button on the check-email screen.
+  const [resendStatus, setResendStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
 
   const {
     register,
@@ -128,8 +130,8 @@ export default function SignupForm() {
         email: values.email,
         password: values.password,
       });
-      // Success: send user to login
-      router.push("/login");
+      // Show the "check your email" screen instead of redirecting to login.
+      setRegisteredEmail(values.email);
     } catch (err: unknown) {
       // Extract the FastAPI detail message, fall back to a generic string
       const detail =
@@ -147,6 +149,22 @@ export default function SignupForm() {
     }
   };
 
+  // ── Resend verification email ───────────────────────────────────────────────
+  const handleResend = async () => {
+    if (!registeredEmail || resendStatus === "sending") return;
+    setResendStatus("sending");
+    try {
+      const res = await fetch("/api/auth/resend-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: registeredEmail }),
+      });
+      setResendStatus(res.ok ? "sent" : "error");
+    } catch {
+      setResendStatus("error");
+    }
+  };
+
   // ── Google OAuth handler (placeholder — wired to next-auth in a later step) ──
   const handleGoogleSignIn = () => {
     const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
@@ -155,6 +173,84 @@ export default function SignupForm() {
 
   return (
     <>
+      {/* ── Check-email screen (shown after successful registration) ──────── */}
+      {registeredEmail ? (
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: "3.5rem", marginBottom: "1rem" }}>📧</div>
+
+          <h2
+            style={{
+              fontSize: "1.5rem",
+              fontWeight: 800,
+              marginBottom: "0.5rem",
+              background: "linear-gradient(135deg, #2d5766, #1e404b)",
+              WebkitBackgroundClip: "text",
+              WebkitTextFillColor: "transparent",
+              backgroundClip: "text",
+            }}
+            className="dark:[background:linear-gradient(135deg,#c0a0f0,#7dd3fc)] dark:[WebkitBackgroundClip:text] dark:[backgroundClip:text]"
+          >
+            Check your email!
+          </h2>
+
+          <p style={{ color: "#6b8fa0", fontSize: "0.95rem", marginBottom: "0.5rem" }}
+             className="dark:[color:#7a8faa]">
+            We sent a verification link to
+          </p>
+          <p style={{ fontWeight: 700, color: "#2d5766", marginBottom: "1.5rem", wordBreak: "break-all" }}
+             className="dark:[color:#c0a0f0]">
+            {registeredEmail}
+          </p>
+
+          <p style={{ color: "#6b8fa0", fontSize: "0.85rem", marginBottom: "1.5rem" }}
+             className="dark:[color:#7a8faa]">
+            Click the link in the email to activate your account.
+            The link expires in <strong>24 hours</strong>.
+          </p>
+
+          {/* Resend button */}
+          <button
+            onClick={handleResend}
+            disabled={resendStatus === "sending" || resendStatus === "sent"}
+            style={{
+              width: "100%",
+              background: "linear-gradient(135deg, #3d7a8c, #1e4d5c)",
+              color: "#fff",
+              border: "none",
+              borderRadius: 50,
+              padding: "0.85rem",
+              fontWeight: 700,
+              fontSize: "0.95rem",
+              cursor: resendStatus === "sending" || resendStatus === "sent" ? "not-allowed" : "pointer",
+              opacity: resendStatus === "sending" || resendStatus === "sent" ? 0.7 : 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "0.5rem",
+              marginBottom: "1rem",
+            }}
+            className="dark:[background:linear-gradient(135deg,#9b7cf0,#5db8fe)] dark:[color:#0a0f1a]"
+          >
+            {resendStatus === "sending" && <Loader2 size={16} className="animate-spin" />}
+            {resendStatus === "sent" ? "Email resent!" : resendStatus === "sending" ? "Sending…" : "Resend verification email"}
+          </button>
+
+          {resendStatus === "error" && (
+            <p style={{ color: "#FF8B94", fontSize: "0.8rem", marginBottom: "1rem" }}>
+              Failed to resend. Please try again later.
+            </p>
+          )}
+
+          {/* Sign-in link */}
+          <p style={{ fontSize: "0.85rem", color: "#6b8fa0" }} className="dark:[color:#7a8faa]">
+            Email verified?{" "}
+            <a href="/login" style={{ color: "#FF8B94", fontWeight: 600, textDecoration: "none" }}>
+              Sign in here
+            </a>
+          </p>
+        </div>
+      ) : (
+        <>
       {/* ── Logo icon ─────────────────────────────────────────────────────── */}
       <div style={{ textAlign: "center", marginBottom: "0.5rem" }}>
         <span
@@ -370,6 +466,8 @@ export default function SignupForm() {
           Sign in
         </a>
       </p>
+    </>
+      )}
     </>
   );
 }
