@@ -17,6 +17,8 @@ from app.models import user, refresh_token  # noqa: F401
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Configure Cloudinary before any request can reach the image upload endpoint.
+    settings.configure_cloudinary()
     await connect_to_redis()
     await connect_to_mongo()
     await init_db()

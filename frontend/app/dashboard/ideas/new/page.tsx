@@ -51,6 +51,7 @@ export default function NewIdeaPage() {
   const [apiErr, setApiErr]     = useState("");
   const [tagInput, setTagInput] = useState("");
   const [preview, setPreview]   = useState<string | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null); // actual File for upload
   const fileRef = useRef<HTMLInputElement>(null);
 
   const { register, handleSubmit, control, setValue, watch, formState: { errors } } =
@@ -75,6 +76,13 @@ export default function NewIdeaPage() {
   function handleImageChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+    // Frontend validation — quick UX check before backend validates magic bytes
+    const allowed = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+    if (!allowed.includes(file.type)) { setApiErr("Only JPEG, PNG, WebP, and GIF images are allowed."); return; }
+    if (file.size > 5 * 1024 * 1024) { setApiErr("File too large. Maximum size is 5 MB."); return; }
+    setApiErr("");
+    setImageFile(file);
+    // Show a local preview immediately — no upload yet
     const reader = new FileReader();
     reader.onload = () => setPreview(reader.result as string);
     reader.readAsDataURL(file);
@@ -88,6 +96,21 @@ export default function NewIdeaPage() {
       : (data.tags ?? []);
     setSaving(true); setApiErr("");
     try {
+      // Upload image first if one was selected.
+      // The backend validates magic bytes — base64 is never sent to the server.
+      let imageUrl: string | undefined;
+      if (imageFile) {
+        const formData = new FormData();
+        formData.append("file", imageFile);
+        const uploadRes = await fetch("/api/ideas/image", { method: "POST", body: formData });
+        if (!uploadRes.ok) {
+          const err = await uploadRes.json().catch(() => ({})) as { detail?: string };
+          throw new Error(err.detail ?? "Image upload failed.");
+        }
+        const uploadData = await uploadRes.json() as { url: string };
+        imageUrl = uploadData.url; // Cloudinary HTTPS URL
+      }
+
       const res = await fetch("/api/ideas/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -96,13 +119,13 @@ export default function NewIdeaPage() {
           status:   data.status.toLowerCase(),
           priority: data.priority.toLowerCase(),
           tags:     finalTags,
-          ...(preview ? { image: preview } : {}),
+          ...(imageUrl ? { imageUrl } : {}), // only set if an image was uploaded
         }),
       });
       if (!res.ok) throw new Error("Failed");
       router.push("/dashboard");
-    } catch {
-      setApiErr("Failed to save idea. Please try again.");
+    } catch (err: unknown) {
+      setApiErr(err instanceof Error ? err.message : "Failed to save idea. Please try again.");
     } finally {
       setSaving(false);
     }

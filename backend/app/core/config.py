@@ -1,5 +1,6 @@
 import json
 
+import cloudinary
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -56,6 +57,24 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/auth/google/callback"
     FRONTEND_URL: str = "http://localhost:3000"
+
+    # Cloudinary — image storage
+    CLOUDINARY_CLOUD_NAME: str = ""
+    CLOUDINARY_API_KEY: str = ""
+    CLOUDINARY_API_SECRET: str = ""
+
+    def configure_cloudinary(self) -> None:
+        """Configure the Cloudinary SDK with credentials from settings.
+
+        Called once at app startup (lifespan). All subsequent calls to
+        cloudinary.uploader.upload / destroy will use these credentials.
+        """
+        cloudinary.config(
+            cloud_name=self.CLOUDINARY_CLOUD_NAME,
+            api_key=self.CLOUDINARY_API_KEY,
+            api_secret=self.CLOUDINARY_API_SECRET,
+            secure=True,  # Always use HTTPS URLs
+        )
 
 
 settings = Settings()

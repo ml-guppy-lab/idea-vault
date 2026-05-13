@@ -29,6 +29,7 @@ class IdeaCreate(BaseModel):
     tags: Optional[list[str]] = Field(default=[])
     status: Optional[IdeaStatus] = Field(default=IdeaStatus.raw)
     priority: Optional[IdeaPriority] = Field(default=IdeaPriority.low)
+    imageUrl: Optional[str] = Field(default=None)  # Cloudinary URL set after upload
 
     @field_validator("tags")
     @classmethod
@@ -64,6 +65,7 @@ class IdeaUpdate(BaseModel):
     tags: Optional[list[str]] = Field(default=None)
     status: Optional[IdeaStatus] = Field(default=None)
     priority: Optional[IdeaPriority] = Field(default=None)
+    imageUrl: Optional[str] = Field(default=None)  # Cloudinary URL; None = unchanged
 
 
 # --- Response Schema (what your API sends BACK to the frontend) ---
@@ -77,6 +79,7 @@ class IdeaResponse(BaseModel):
     tags: list[str] = []
     status: IdeaStatus
     priority: IdeaPriority
+    imageUrl: Optional[str] = None  # Cloudinary HTTPS URL; absent when no image uploaded
     createdAt: datetime
     updatedAt: datetime
 
@@ -93,6 +96,7 @@ class IdeaInDB(BaseModel):
     tags: list[str] = []
     status: IdeaStatus = IdeaStatus.raw
     priority: IdeaPriority = IdeaPriority.low
+    imageUrl: Optional[str] = None
     createdAt: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
