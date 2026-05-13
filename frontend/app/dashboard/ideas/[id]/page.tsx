@@ -12,7 +12,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 
 // ── Types & schema ────────────────────────────────────────────────────────────
 
-interface Idea { id: string; title: string; description?: string; tags: string[]; status: string; priority: string; createdAt: string; updatedAt: string; image?: string; }
+interface Idea { id: string; title: string; description?: string; tags: string[]; status: string; priority: string; createdAt: string; updatedAt: string; imageUrl?: string; }
 
 const schema = z.object({
   title: z.string().min(1, "Title is required").max(100),
@@ -49,6 +49,7 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
   const [deleting, setDeleting] = useState(false);
   const [tagInput, setTagInput] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null); // new file picked in edit mode
   const [apiErr, setApiErr]   = useState("");
 
   const { register, handleSubmit, control, setValue, watch, reset, formState: { errors } } =
@@ -61,7 +62,7 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
         const idea: Idea = { ...d, id: d._id, status: cap(d.status), priority: cap(d.priority) };
         setIdea(idea);
         reset({ title: idea.title, description: idea.description ?? "", tags: idea.tags, status: idea.status as FormData["status"], priority: idea.priority as FormData["priority"] });
-        if (idea.image) setPreview(idea.image);
+        if (idea.imageUrl) setPreview(idea.imageUrl); // show existing Cloudinary image
       })
       .catch(code => { if (code === 404) setNotFound(true); })
       .finally(() => setLoading(false));
@@ -75,17 +76,34 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
       : (data.tags ?? []);
     setSaving(true); setApiErr("");
     try {
+      // Upload new image first if the user picked one in edit mode.
+      // Only fires when a new file was selected; existing imageUrl is kept otherwise.
+      let imageUrl: string | undefined = idea?.imageUrl;
+      if (imageFile) {
+        const formData = new FormData();
+        formData.append("file", imageFile);
+        const uploadRes = await fetch("/api/ideas/image", { method: "POST", body: formData });
+        if (!uploadRes.ok) {
+          const err = await uploadRes.json().catch(() => ({})) as { detail?: string };
+          throw new Error(err.detail ?? "Image upload failed.");
+        }
+        const uploadData = await uploadRes.json() as { url: string };
+        imageUrl = uploadData.url;
+      }
+
       const res = await fetch(`/api/ideas/${id}`, {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, status: data.status.toLowerCase(), priority: data.priority.toLowerCase(), tags: finalTags, ...(preview ? { image: preview } : {}) }),
+        body: JSON.stringify({ ...data, status: data.status.toLowerCase(), priority: data.priority.toLowerCase(), tags: finalTags, ...(imageUrl ? { imageUrl } : {}) }),
       });
       if (!res.ok) throw new Error();
       const d = await res.json();
       const updated: Idea = { ...d, id: d._id, status: cap(d.status), priority: cap(d.priority) };
       setIdea(updated);
+      setImageFile(null);
       setEditing(false);
-    } catch { setApiErr("Failed to save. Please try again."); }
-    finally { setSaving(false); }
+    } catch (err: unknown) {
+      setApiErr(err instanceof Error ? err.message : "Failed to save. Please try again.");
+    } finally { setSaving(false); }
   }
 
   async function onDelete() {
@@ -154,7 +172,7 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
             )}
 
             {/* Image */}
-            {idea.image && <img src={idea.image} alt="idea" style={{ width: "100%", maxHeight: 350, objectFit: "cover", borderRadius: 18, margin: "1rem 0", boxShadow: "0 8px 24px rgba(0,0,0,0.15)" }} />}
+            {idea.imageUrl && <img src={idea.imageUrl} alt="idea" style={{ width: "100%", maxHeight: 350, objectFit: "cover", borderRadius: 18, margin: "1rem 0", boxShadow: "0 8px 24px rgba(0,0,0,0.15)" }} />}
 
             {/* Description */}
             {idea.description && <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.7, fontSize: "0.95rem", marginTop: "1rem" }} className="[color:#3d6678] dark:[color:#b4c8e0]">{idea.description}</p>}
@@ -224,7 +242,17 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
                 <CloudUpload size={26} color="#6b8fa0" style={{ margin: "0 auto 0.3rem" }} />
                 <p style={{ margin: 0, fontSize: "0.82rem", color: "#6b8fa0" }}>Click to change image</p>
               </div>
-              <input id="edit-img-input" type="file" accept="image/*" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setPreview(r.result as string); r.readAsDataURL(f); } }} />
+              <input id="edit-img-input" type="file" accept="image/*" style={{ display: "none" }} onChange={e => {
+                const f = e.target.files?.[0];
+                if (!f) return;
+                // Frontend validation — quick UX check before backend validates magic bytes
+                const allowed = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+                if (!allowed.includes(f.type)) { setApiErr("Only JPEG, PNG, WebP, and GIF images are allowed."); return; }
+                if (f.size > 5 * 1024 * 1024) { setApiErr("File too large. Maximum size is 5 MB."); return; }
+                setApiErr("");
+                setImageFile(f); // store for upload on save
+                const r = new FileReader(); r.onload = () => setPreview(r.result as string); r.readAsDataURL(f);
+              }} />
               {preview && <img src={preview} alt="preview" style={{ maxHeight: 180, width: "100%", objectFit: "cover", borderRadius: 14, boxShadow: "0 4px 16px rgba(0,0,0,0.15)" }} />}
             </div>
 

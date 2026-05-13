@@ -10,8 +10,9 @@ import re
 from datetime import datetime, timezone
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status, UploadFile, File
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from app.services.image_service import validate_and_upload_image
 
 from app.core.security import get_current_user
 from app.db.mongodb import get_mongo_db
@@ -100,6 +101,19 @@ _SORT_DIRECTION = {"asc": 1, "desc": -1}
 # add a temporary numeric weight in the aggregation pipeline instead.
 _PRIORITY_WEIGHT = {"low": 1, "medium": 2, "high": 3}
 
+@router.post(
+    "/image",
+    summary="Upload an image for an idea"
+)
+async def upload_image(
+    file: UploadFile = File(...),
+    current_user = Depends(get_current_user)
+):
+    image_url = await validate_and_upload_image(
+        file=file,
+        user_id=str(current_user.id)
+    )
+    return {"url": image_url}
 
 @router.get(
     "/list",
