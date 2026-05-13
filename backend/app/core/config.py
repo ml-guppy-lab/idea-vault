@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/auth/google/callback"
     FRONTEND_URL: str = "http://localhost:3000"
 
+    # Resend — transactional email
+    RESEND_API_KEY: str = ""
+    # Use a verified sender domain in production, e.g. "Idea Vault <noreply@yourdomain.com>"
+    EMAIL_FROM: str = "Idea Vault <onboarding@resend.dev>"
+    # Dev-only override: when set, ALL outgoing emails are delivered to this
+    # address instead of the real recipient. Remove in production.
+    EMAIL_OVERRIDE_TO: str = ""
+
     # Cloudinary — image storage
     CLOUDINARY_CLOUD_NAME: str = ""
     CLOUDINARY_API_KEY: str = ""

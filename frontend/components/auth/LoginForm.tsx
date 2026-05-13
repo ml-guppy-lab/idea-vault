@@ -78,6 +78,11 @@ function AuthInput({
 export default function LoginForm() {
   const router = useRouter();
   const [apiError, setApiError] = useState<string | null>(null);
+  // When true, the error is "email not verified" — show the resend button.
+  const [showResend, setShowResend] = useState(false);
+  const [resendStatus, setResendStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  // Track the last attempted email so we can resend to it.
+  const [lastEmail, setLastEmail] = useState("");
 
   const {
     register,
@@ -89,6 +94,9 @@ export default function LoginForm() {
 
   const onSubmit = async (values: LoginFormValues) => {
     setApiError(null);
+    setShowResend(false);
+    setResendStatus("idle");
+    setLastEmail(values.email);
     try {
       // Call the Next.js BFF login proxy — never FastAPI directly.
       // The proxy sets access_token + refresh_token as httpOnly cookies
@@ -106,6 +114,10 @@ export default function LoginForm() {
           setApiError(detail.map((d) => d.msg).join(" · "));
         } else if (typeof detail === "string") {
           setApiError(detail);
+          // 403 with "verify" in message → show the resend button
+          if (res.status === 403 && detail.toLowerCase().includes("verify")) {
+            setShowResend(true);
+          }
         } else {
           setApiError("Something went wrong. Please try again.");
         }
@@ -115,6 +127,21 @@ export default function LoginForm() {
       router.push("/dashboard");
     } catch {
       setApiError("Something went wrong. Please try again.");
+    }
+  };
+
+  const handleResend = async () => {
+    if (!lastEmail || resendStatus === "sending") return;
+    setResendStatus("sending");
+    try {
+      const res = await fetch("/api/auth/resend-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: lastEmail }),
+      });
+      setResendStatus(res.ok ? "sent" : "error");
+    } catch {
+      setResendStatus("error");
     }
   };
 
@@ -209,16 +236,40 @@ export default function LoginForm() {
         />
 
         {apiError && (
-          <p
-            style={{
-              color: "#FF8B94",
-              fontSize: "0.85rem",
-              textAlign: "center",
-              marginTop: "-0.25rem",
-            }}
-          >
-            {apiError}
-          </p>
+          <div style={{ textAlign: "center", marginTop: "-0.25rem" }}>
+            <p style={{ color: "#FF8B94", fontSize: "0.85rem" }}>{apiError}</p>
+
+            {/* Resend verification link — shown when backend says email not verified */}
+            {showResend && (
+              <div style={{ marginTop: "0.5rem" }}>
+                <button
+                  type="button"
+                  onClick={handleResend}
+                  disabled={resendStatus === "sending" || resendStatus === "sent"}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#8FD3F4",
+                    fontSize: "0.82rem",
+                    cursor: resendStatus === "sending" || resendStatus === "sent" ? "default" : "pointer",
+                    textDecoration: "underline",
+                    padding: 0,
+                  }}
+                >
+                  {resendStatus === "sent"
+                    ? "✓ Verification email sent!"
+                    : resendStatus === "sending"
+                    ? "Sending…"
+                    : "Resend verification email"}
+                </button>
+                {resendStatus === "error" && (
+                  <p style={{ color: "#FF8B94", fontSize: "0.75rem", marginTop: "0.25rem" }}>
+                    Failed to send. Please try again.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         <button
@@ -275,6 +326,25 @@ export default function LoginForm() {
           style={{ color: "#FF8B94", fontWeight: 600, textDecoration: "none" }}
         >
           Sign up
+        </a>
+      </p>
+
+      {/* ── Forgot password link ─────────────────────────────────────────── */}
+      <p
+        style={{
+          textAlign: "center",
+          marginTop: "0.25rem",
+          fontSize: "0.8rem",
+          color: "#6b8fa0",
+        }}
+        className="dark:[color:#7a8faa]"
+      >
+        <a
+          href="/forgot-password"
+          style={{ color: "#6b8fa0", textDecoration: "underline" }}
+          className="dark:[color:#7a8faa]"
+        >
+          Forgot password?
         </a>
       </p>
     </>

@@ -32,6 +32,13 @@ async def init_db() -> None:
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS gender VARCHAR(30)",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth DATE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT",
+            # Email verification columns (v2)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token_hash VARCHAR(64)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token_expires TIMESTAMPTZ",
+            # Password reset columns (v2)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_hash VARCHAR(64)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMPTZ",
         ]
         for stmt in migrations:
             await conn.execute(text(stmt))

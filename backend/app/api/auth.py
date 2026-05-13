@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
+import secrets
 import uuid
 
 import pkce
 from authlib.integrations.starlette_client import OAuth
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
@@ -24,7 +26,16 @@ from app.db.postgres import get_db
 from app.db.redis import get_redis
 from app.models.refresh_token import RefreshToken
 from app.models.user import AuthProvider, User
-from app.schemas.user import AccessToken, UserCreate, UserLogin, UserRead
+from app.schemas.user import (
+    AccessToken,
+    ForgotPasswordRequest,
+    ResendVerificationRequest,
+    ResetPasswordRequest,
+    UserCreate,
+    UserLogin,
+    UserRead,
+)
+from app.services.email_service import send_password_reset_email, send_verification_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -55,6 +66,21 @@ _is_secure = settings.FRONTEND_URL.startswith("https://")
 
 # Refresh-token cookie lifetime in seconds — mirrors the DB token expiry.
 _REFRESH_COOKIE_MAX_AGE = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
+
+
+def _generate_token() -> tuple[str, str]:
+    """Create a cryptographically secure one-time token.
+
+    Returns (raw_token, token_hash):
+      - raw_token  → embedded in the email link (URL-safe, 32 bytes / 43 chars)
+      - token_hash → SHA-256 hex digest stored in the DB
+
+    Storing only the hash means a DB dump cannot be used to trigger actions
+    — the attacker would still need the raw token that was emailed to the user.
+    """
+    raw = secrets.token_urlsafe(32)
+    hashed = hashlib.sha256(raw.encode()).hexdigest()
+    return raw, hashed
 
 
 # ---------------------------------------------------------------------------
@@ -128,34 +154,57 @@ async def check_rate_limit(
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
 async def register(
     payload: UserCreate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(check_rate_limit),  # enforces 5 attempts per IP per 15 min
 ):
     # Pydantic has already validated email format and password strength by this point
 
-    # Check if a user with this email already exists
     result = await db.execute(select(User).where(User.email == payload.email))
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Email already registered",
-        )
+    existing = result.scalar_one_or_none()
 
-    # Hash the password — the plain text password is never stored
+    if existing:
+        if existing.email_verified:
+            # Fully verified account — definite conflict. Never reveal more detail
+            # than necessary (don't expose that the email is "already verified").
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Email already registered",
+            )
+
+        # Unverified ghost account — the user registered but email delivery
+        # failed (or the link was never clicked). Allow them to re-register:
+        # update their password and issue a fresh verification token, then
+        # resend the email. No duplicate DB row is created.
+        raw_token, token_hash = _generate_token()
+        existing.hashed_password = hash_password(payload.password)
+        existing.verification_token_hash = token_hash
+        existing.verification_token_expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        await db.commit()
+        await db.refresh(existing)
+        background_tasks.add_task(send_verification_email, existing.email, raw_token)
+        return existing
+
+    # Brand-new email — generate a one-time verification token.
+    # raw_token goes in the email link; only the hash is stored in the DB.
+    raw_token, token_hash = _generate_token()
+
     user = User(
         email=payload.email,
         hashed_password=hash_password(payload.password),
-        auth_provider=AuthProvider.local,  # default for email/password signup
+        auth_provider=AuthProvider.local,
         is_active=True,
         created_at=datetime.now(timezone.utc),
+        email_verified=False,
+        verification_token_hash=token_hash,
+        verification_token_expires=datetime.now(timezone.utc) + timedelta(hours=24),
     )
 
-    # Persist to PostgreSQL
     db.add(user)
     await db.commit()
-    await db.refresh(user)  # reload from DB to get the generated id
+    await db.refresh(user)
 
-    # UserRead only returns id and email — hashed_password is never exposed
+    background_tasks.add_task(send_verification_email, user.email, raw_token)
     return user
 
 
@@ -191,6 +240,14 @@ async def login(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is disabled",
+        )
+
+    # Block login until the user has verified their email address.
+    # Google OAuth users are pre-verified, so this only applies to local accounts.
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please verify your email address before logging in. Check your inbox for the verification link.",
         )
 
     # --- tokens ---
@@ -394,12 +451,14 @@ async def google_callback(
     if not user:
         # First time this Google account has logged in — create a new user row.
         # hashed_password is None because OAuth users never set a password with us.
+        # email_verified=True because Google already verified the email address.
         user = User(
             email=email,
             hashed_password=None,
             auth_provider=AuthProvider.google,
             is_active=True,
             created_at=datetime.now(timezone.utc),
+            email_verified=True,
         )
         db.add(user)
         await db.commit()
@@ -479,3 +538,183 @@ async def google_token(
         max_age=_REFRESH_COOKIE_MAX_AGE,
     )
     return AccessToken(access_token=data["access_token"])
+
+
+# ---------------------------------------------------------------------------
+# Email verification
+# ---------------------------------------------------------------------------
+
+
+@router.get("/verify-email", status_code=status.HTTP_200_OK)
+async def verify_email(token: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Verify a user's email address using the one-time token from the email link.
+
+    The token is hashed before the DB lookup so the raw value is never stored.
+    Returns 200 even when already verified so the UI can show a friendly message.
+    """
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+    result = await db.execute(
+        select(User).where(User.verification_token_hash == token_hash)
+    )
+    user = result.scalar_one_or_none()
+
+    _invalid = HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Invalid or expired verification link. Please request a new one.",
+    )
+
+    if not user:
+        raise _invalid
+
+    # Idempotent — already verified is not an error
+    if user.email_verified:
+        return {"message": "Email already verified. You can now log in."}
+
+    if datetime.now(timezone.utc) > user.verification_token_expires:
+        raise _invalid
+
+    # Mark verified and clear the one-time token so it cannot be replayed
+    user.email_verified = True
+    user.verification_token_hash = None
+    user.verification_token_expires = None
+    await db.commit()
+
+    return {"message": "Email verified successfully. You can now log in."}
+
+
+# ---------------------------------------------------------------------------
+# Password reset — two-step flow
+# ---------------------------------------------------------------------------
+
+
+@router.post("/forgot-password", status_code=status.HTTP_200_OK)
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+) -> dict:
+    """Initiate a password reset.
+
+    Rate-limited to 3 requests per email per hour to prevent email flooding.
+    Always returns 200 — never reveals whether the email is registered.
+    """
+    # Per-email rate limit: max 3 reset requests per hour.
+    # Using email (not IP) prevents an attacker from flooding a specific inbox
+    # from many different IP addresses.
+    rate_key = f"forgot_password:{payload.email}"
+    count = await redis.incr(rate_key)
+    if count == 1:
+        # Start the 1-hour window on the first request.
+        await redis.expire(rate_key, 3600)
+    if count > 3:
+        ttl = await redis.ttl(rate_key)
+        minutes = ttl // 60
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many password reset requests. Try again in {minutes} minute(s).",
+            headers={"Retry-After": str(ttl)},
+        )
+
+    result = await db.execute(select(User).where(User.email == payload.email))
+    user = result.scalar_one_or_none()
+
+    # Only send the email if:
+    #   1. The user exists, AND
+    #   2. They are a local (password-based) account — OAuth users have no password
+    # We never reveal whether the account exists.
+    if user and user.hashed_password:
+        raw_token, token_hash = _generate_token()
+        user.reset_token_hash = token_hash
+        user.reset_token_expires = datetime.now(timezone.utc) + timedelta(hours=1)
+        await db.commit()
+        background_tasks.add_task(send_password_reset_email, user.email, raw_token)
+
+    return {
+        "message": "If that email is registered, you will receive a password reset link shortly."
+    }
+
+
+@router.post("/reset-password", status_code=status.HTTP_200_OK)
+async def reset_password(
+    payload: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Complete a password reset using the one-time token from the email link.
+
+    The token is valid for 1 hour and is deleted after first use.
+    """
+    token_hash = hashlib.sha256(payload.token.encode()).hexdigest()
+
+    result = await db.execute(
+        select(User).where(User.reset_token_hash == token_hash)
+    )
+    user = result.scalar_one_or_none()
+
+    _invalid = HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Invalid or expired reset link. Please request a new one.",
+    )
+
+    if not user:
+        raise _invalid
+
+    if datetime.now(timezone.utc) > user.reset_token_expires:
+        raise _invalid
+
+    # Update the password and clear the one-time token (prevents replay)
+    user.hashed_password = hash_password(payload.new_password)
+    user.reset_token_hash = None
+    user.reset_token_expires = None
+    await db.commit()
+
+    return {"message": "Password reset successfully. You can now log in."}
+
+
+# ---------------------------------------------------------------------------
+# Resend verification email
+# ---------------------------------------------------------------------------
+
+
+@router.post("/resend-verification", status_code=status.HTTP_200_OK)
+async def resend_verification(
+    payload: ResendVerificationRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+) -> dict:
+    """Issue a fresh verification email to a registered but unverified user.
+
+    Rate-limited to 3 requests per email per hour to prevent abuse.
+    Always returns 200 — never reveals whether the email is registered.
+    """
+    # Per-email rate limit — same pattern as forgot-password.
+    rate_key = f"resend_verification:{payload.email}"
+    count = await redis.incr(rate_key)
+    if count == 1:
+        await redis.expire(rate_key, 3600)
+    if count > 3:
+        ttl = await redis.ttl(rate_key)
+        minutes = ttl // 60
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many requests. Try again in {minutes} minute(s).",
+            headers={"Retry-After": str(ttl)},
+        )
+
+    result = await db.execute(select(User).where(User.email == payload.email))
+    user = result.scalar_one_or_none()
+
+    # Only act if the user exists AND is still unverified.
+    # We never reveal whether the account exists.
+    if user and not user.email_verified:
+        raw_token, token_hash = _generate_token()
+        user.verification_token_hash = token_hash
+        user.verification_token_expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        await db.commit()
+        background_tasks.add_task(send_verification_email, user.email, raw_token)
+
+    return {
+        "message": "If that email is registered and unverified, a new verification link has been sent."
+    }
