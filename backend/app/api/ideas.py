@@ -6,11 +6,12 @@ the Authorization: Bearer header and returns the authenticated User row from
 PostgreSQL. The `userId` stored on every idea document is that user's id string.
 """
 
+import asyncio
 import re
 from datetime import datetime, timezone
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status, UploadFile, File
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.services.image_service import validate_and_upload_image
 
@@ -18,8 +19,22 @@ from app.core.security import get_current_user
 from app.db.mongodb import get_mongo_db
 from app.models.user import User
 from app.schemas.idea import IdeaCreate, IdeaListResponse, IdeaResponse, IdeaStatus, IdeaUpdate
+from app.services.embedding_service import generate_idea_embedding
 
 router = APIRouter(prefix="/ideas", tags=["ideas"])
+
+
+async def _embed_and_store(db: AsyncIOMotorDatabase, idea_id: ObjectId, title: str, summary: str) -> None:
+    """
+    Background task: generate the embedding and write it to MongoDB.
+
+    Runs AFTER the HTTP response is already sent to the client, so it never
+    adds latency to the save operation. model.encode() is CPU-bound, so we
+    offload it to a thread pool via asyncio.to_thread to avoid blocking the
+    event loop while it runs.
+    """
+    embedding = await asyncio.to_thread(generate_idea_embedding, title, summary)
+    await db.ideas.update_one({"_id": idea_id}, {"$set": {"embedding": embedding}})
 
 
 def _serialize_idea(doc: dict) -> dict:
@@ -42,6 +57,7 @@ def _serialize_idea(doc: dict) -> dict:
 )
 async def create_idea(
     payload: IdeaCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),      # JWT auth gate
     db: AsyncIOMotorDatabase = Depends(get_mongo_db),    # Motor DB dependency
 ) -> IdeaResponse:
@@ -56,11 +72,11 @@ async def create_idea(
     """
     now = datetime.now(timezone.utc)  # single timestamp for both fields
 
-    # Build the document to insert into MongoDB.
-    # We use model_dump() to get a plain dict from the validated Pydantic model,
-    # then inject server-controlled fields that the client must not provide.
+    # Build the document WITHOUT the embedding — it is generated in a
+    # background task after this response is returned, so the user sees
+    # an instant save. The embedding field is added async moments later.
     document = {
-        **payload.model_dump(),   # title, description, tags, status, priority
+        **payload.model_dump(),   # title, summary, description, tags, status, priority
         "userId": current_user.id,
         "createdAt": now,
         "updatedAt": now,
@@ -68,6 +84,11 @@ async def create_idea(
 
     # Motor's insert_one returns an InsertOneResult with the generated _id.
     result = await db.ideas.insert_one(document)
+
+    # Queue embedding generation — runs after response is sent, zero UX impact.
+    background_tasks.add_task(
+        _embed_and_store, db, result.inserted_id, payload.title, payload.summary
+    )
 
     # Fetch the saved document back from MongoDB so we return exactly what was
     # stored (including the _id MongoDB generated) rather than reconstructing it.
@@ -440,6 +461,7 @@ async def get_idea(
 async def update_idea(
     idea_id: str,
     payload: IdeaUpdate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),    # JWT auth gate
     db: AsyncIOMotorDatabase = Depends(get_mongo_db),  # Motor DB dependency
 ) -> IdeaResponse:
@@ -488,6 +510,17 @@ async def update_idea(
         for k, v in payload.model_dump(exclude_unset=True).items()
         if v is not None
     }
+
+    # Re-embed in background when summary or title changes — keeps vector in
+    # sync without adding latency to the update response.
+    new_title = updates.get("title", doc["title"])
+    new_summary = updates.get("summary")
+    if new_summary or "title" in updates:
+        background_tasks.add_task(
+            _embed_and_store, db, oid,
+            new_title,
+            new_summary if new_summary else doc["summary"],
+        )
 
     # --- always stamp updatedAt, even if no other field changed ---
     updates["updatedAt"] = datetime.now(timezone.utc)

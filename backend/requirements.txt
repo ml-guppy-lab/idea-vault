@@ -28,3 +28,7 @@ cloudinary>=1.0.0,<2.0.0         # Cloudinary SDK for image uploads (v2 not yet 
 python-magic>=0.4.27            # MIME-type validation using magic bytes (requires libmagic1)
 
 resend[async]>=2.30.1       # Resend SDK for transactional emails (async extra enables send_async) 
+
+# AI/ML integration
+openai>=1.30.0               # OpenAI API client for AI features
+sentence-transformers==2.7.0   # For generating idea embeddings (semantic search)

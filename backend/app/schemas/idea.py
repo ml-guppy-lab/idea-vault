@@ -23,9 +23,18 @@ class IdeaPriority(str, Enum):
 
 # --- Request Schema (what the user sends when CREATING an idea) ---
 
+# all-MiniLM-L6-v2 has a 256-token limit (~1 300 chars / ~190 words).
+# The summary field is the ONLY text embedded for vector search — keeping it
+# short and dense ensures high-quality embeddings with no silent truncation.
+SUMMARY_MAX_WORDS = 190
+
+
 class IdeaCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
-    description: Optional[str] = Field(default=None, max_length=5000)
+    # summary: required, ≤190 words — embedded for RAG/semantic search
+    summary: str = Field(..., min_length=1, max_length=1300,
+                         description="Concise idea summary (≤190 words). Used for semantic search.")
+    description: Optional[str] = Field(default=None, max_length=50000)
     tags: Optional[list[str]] = Field(default=[])
     status: Optional[IdeaStatus] = Field(default=IdeaStatus.raw)
     priority: Optional[IdeaPriority] = Field(default=IdeaPriority.low)
@@ -61,7 +70,8 @@ class IdeaCreate(BaseModel):
 
 class IdeaUpdate(BaseModel):
     title: Optional[str] = Field(default=None, min_length=1, max_length=200)
-    description: Optional[str] = Field(default=None, max_length=5000)
+    summary: Optional[str] = Field(default=None, min_length=1, max_length=1300)
+    description: Optional[str] = Field(default=None, max_length=50000)
     tags: Optional[list[str]] = Field(default=None)
     status: Optional[IdeaStatus] = Field(default=None)
     priority: Optional[IdeaPriority] = Field(default=None)
@@ -75,6 +85,7 @@ class IdeaResponse(BaseModel):
     id: str = Field(alias="_id")
     userId: str
     title: str
+    summary: str
     description: Optional[str] = None
     tags: list[str] = []
     status: IdeaStatus
@@ -92,6 +103,7 @@ class IdeaResponse(BaseModel):
 class IdeaInDB(BaseModel):
     userId: str
     title: str
+    summary: str
     description: Optional[str] = None
     tags: list[str] = []
     status: IdeaStatus = IdeaStatus.raw
