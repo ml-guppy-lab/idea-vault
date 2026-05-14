@@ -18,6 +18,7 @@ from app.core.security import get_current_user
 from app.db.mongodb import get_mongo_db
 from app.models.user import User
 from app.schemas.idea import IdeaCreate, IdeaListResponse, IdeaResponse, IdeaStatus, IdeaUpdate
+from app.services.embedding_service import generate_idea_embedding
 
 router = APIRouter(prefix="/ideas", tags=["ideas"])
 
@@ -56,12 +57,18 @@ async def create_idea(
     """
     now = datetime.now(timezone.utc)  # single timestamp for both fields
 
+    # Embed the summary for semantic/vector search.
+    # This runs synchronously but is fast (~5 ms) after the first call
+    # because the model is cached via lru_cache in embedding_service.
+    embedding = generate_idea_embedding(payload.summary)
+
     # Build the document to insert into MongoDB.
     # We use model_dump() to get a plain dict from the validated Pydantic model,
     # then inject server-controlled fields that the client must not provide.
     document = {
-        **payload.model_dump(),   # title, description, tags, status, priority
+        **payload.model_dump(),   # title, summary, description, tags, status, priority
         "userId": current_user.id,
+        "embedding": embedding,   # 384-dim float list for vector search
         "createdAt": now,
         "updatedAt": now,
     }
@@ -488,6 +495,10 @@ async def update_idea(
         for k, v in payload.model_dump(exclude_unset=True).items()
         if v is not None
     }
+
+    # Re-embed whenever the summary changes so the vector stays in sync.
+    if "summary" in updates:
+        updates["embedding"] = generate_idea_embedding(updates["summary"])
 
     # --- always stamp updatedAt, even if no other field changed ---
     updates["updatedAt"] = datetime.now(timezone.utc)

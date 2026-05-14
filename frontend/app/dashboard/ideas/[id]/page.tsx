@@ -12,10 +12,29 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 
 // ── Types & schema ────────────────────────────────────────────────────────────
 
-interface Idea { id: string; title: string; description?: string; tags: string[]; status: string; priority: string; createdAt: string; updatedAt: string; imageUrl?: string; }
+interface Idea { id: string; title: string; summary: string; description?: string; tags: string[]; status: string; priority: string; createdAt: string; updatedAt: string; imageUrl?: string; }
+
+const SUMMARY_MAX_WORDS = 190;
+function countWords(text: string): number {
+  return text.trim() === "" ? 0 : text.trim().split(/\s+/).length;
+}
+function handleSummaryKeyDown(
+  e: React.KeyboardEvent<HTMLTextAreaElement>,
+  currentText: string
+) {
+  const allowed = ["Backspace","Delete","ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Home","End","Tab"];
+  if (allowed.includes(e.key) || e.ctrlKey || e.metaKey) return;
+  if (countWords(currentText) >= SUMMARY_MAX_WORDS) e.preventDefault();
+}
 
 const schema = z.object({
-  title: z.string().min(1, "Title is required").max(100),
+  title: z.string().min(1, "Title is required").max(200),
+  summary: z
+    .string()
+    .min(1, "Summary is required")
+    .refine((v) => countWords(v) <= SUMMARY_MAX_WORDS, {
+      message: `Summary must be ${SUMMARY_MAX_WORDS} words or fewer`,
+    }),
   description: z.string().optional(),
   tags: z.array(z.string()).optional(),
   status: z.enum(["Raw","Exploring","Validated","Building","Shipped","Abandoned"]),
@@ -58,10 +77,10 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
   useEffect(() => {
     fetch(`/api/ideas/${id}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then((d: { _id: string; title: string; description?: string; tags: string[]; status: string; priority: string; createdAt: string; updatedAt: string; image?: string }) => {
+      .then((d: { _id: string; title: string; summary: string; description?: string; tags: string[]; status: string; priority: string; createdAt: string; updatedAt: string; image?: string }) => {
         const idea: Idea = { ...d, id: d._id, status: cap(d.status), priority: cap(d.priority) };
         setIdea(idea);
-        reset({ title: idea.title, description: idea.description ?? "", tags: idea.tags, status: idea.status as FormData["status"], priority: idea.priority as FormData["priority"] });
+        reset({ title: idea.title, summary: idea.summary, description: idea.description ?? "", tags: idea.tags, status: idea.status as FormData["status"], priority: idea.priority as FormData["priority"] });
         if (idea.imageUrl) setPreview(idea.imageUrl); // show existing Cloudinary image
       })
       .catch(code => { if (code === 404) setNotFound(true); })
@@ -174,13 +193,21 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
             {/* Image */}
             {idea.imageUrl && <img src={idea.imageUrl} alt="idea" style={{ width: "100%", maxHeight: 350, objectFit: "cover", borderRadius: 18, margin: "1rem 0", boxShadow: "0 8px 24px rgba(0,0,0,0.15)" }} />}
 
+            {/* Summary */}
+            {idea.summary && (
+              <div style={{ margin: "1rem 0 0", padding: "0.9rem 1.1rem", borderRadius: 14, background: "rgba(143,211,244,0.1)", border: "1px solid rgba(143,211,244,0.3)" }}>
+                <p style={{ margin: 0, fontSize: "0.8rem", fontWeight: 600, color: "#6b8fa0", marginBottom: "0.3rem", textTransform: "uppercase", letterSpacing: "0.5px" }}>Summary</p>
+                <p style={{ margin: 0, lineHeight: 1.6, fontSize: "0.95rem" }} className="[color:#3d6678] dark:[color:#b4c8e0]">{idea.summary}</p>
+              </div>
+            )}
+
             {/* Description */}
             {idea.description && <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.7, fontSize: "0.95rem", marginTop: "1rem" }} className="[color:#3d6678] dark:[color:#b4c8e0]">{idea.description}</p>}
 
             {/* Action buttons */}
             <div style={{ display: "flex", gap: "0.8rem", marginTop: "2rem", flexWrap: "wrap" }}>
               <button onClick={() => {
-                reset({ title: idea.title, description: idea.description ?? "", tags: idea.tags ?? [], status: idea.status as FormData["status"], priority: idea.priority as FormData["priority"] });
+                reset({ title: idea.title, summary: idea.summary, description: idea.description ?? "", tags: idea.tags ?? [], status: idea.status as FormData["status"], priority: idea.priority as FormData["priority"] });
                 setTagInput("");
                 setEditing(true);
               }} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.75rem 1.6rem", borderRadius: 50, border: "none", fontWeight: 600, cursor: "pointer", color: "#fff", boxShadow: "0 8px 24px rgba(0,0,0,0.15)", transition: "all 0.2s ease" }}
@@ -220,6 +247,36 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
               <label style={{ fontSize: "0.85rem", fontWeight: 600, color: "#3d6678" }}>Title *</label>
               <input {...register("title")} style={inputBase} className="[color:#1a3a44] dark:[color:#e8eef8] focus:[border-color:#8FD3F4]" />
               {errors.title && <span style={{ fontSize: "0.75rem", color: "#FF6B6B" }}>{errors.title.message}</span>}
+            </div>
+
+            {/* Summary — embedded for RAG/semantic search */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+              <label style={{ fontSize: "0.85rem", fontWeight: 600, color: "#3d6678" }}>Summary * (used for AI search)</label>
+              {(() => {
+                const summaryValue = watch("summary") ?? "";
+                const wordCount = countWords(summaryValue);
+                const atLimit = wordCount >= SUMMARY_MAX_WORDS;
+                return (
+                  <>
+                    <textarea
+                      {...register("summary")}
+                      onKeyDown={(e) => handleSummaryKeyDown(e, summaryValue)}
+                      rows={3}
+                      style={{ ...inputBase, minHeight: 90, resize: "vertical" }}
+                      className="[color:#1a3a44] dark:[color:#e8eef8] focus:[border-color:#8FD3F4]"
+                    />
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: "0.7rem", color: atLimit ? "#FF6B6B" : "#6b8fa0" }}>
+                        {atLimit ? "Word limit reached — add more detail in the description below." : "Concise summary for AI-powered search"}
+                      </span>
+                      <span style={{ fontSize: "0.72rem", fontWeight: 600, color: atLimit ? "#FF6B6B" : wordCount > 170 ? "#f5a623" : "#6b8fa0" }}>
+                        {wordCount} / {SUMMARY_MAX_WORDS}
+                      </span>
+                    </div>
+                    {errors.summary && <span style={{ fontSize: "0.75rem", color: "#FF6B6B" }}>{errors.summary.message}</span>}
+                  </>
+                );
+              })()}
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>

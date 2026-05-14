@@ -13,8 +13,37 @@ import {
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 
+const SUMMARY_MAX_WORDS = 190;
+
+/** Count words the same way the backend will see them. */
+function countWords(text: string): number {
+  return text.trim() === "" ? 0 : text.trim().split(/\s+/).length;
+}
+
+/** Prevent the textarea from accepting input once the word limit is reached.
+ *  Allows navigation keys, selection, backspace/delete so the user can edit. */
+function handleSummaryKeyDown(
+  e: React.KeyboardEvent<HTMLTextAreaElement>,
+  currentText: string
+) {
+  const allowed = [
+    "Backspace", "Delete", "ArrowLeft", "ArrowRight",
+    "ArrowUp", "ArrowDown", "Home", "End", "Tab",
+  ];
+  if (allowed.includes(e.key) || e.ctrlKey || e.metaKey) return;
+  if (countWords(currentText) >= SUMMARY_MAX_WORDS) {
+    e.preventDefault();
+  }
+}
+
 const ideaSchema = z.object({
-  title:       z.string().min(1, "Title is required").max(100),
+  title:   z.string().min(1, "Title is required").max(200),
+  summary: z
+    .string()
+    .min(1, "Summary is required")
+    .refine((v) => countWords(v) <= SUMMARY_MAX_WORDS, {
+      message: `Summary must be ${SUMMARY_MAX_WORDS} words or fewer`,
+    }),
   description: z.string().optional(),
   tags:        z.array(z.string()).optional(),
   status:      z.enum(["Raw","Exploring","Validated","Building","Shipped","Abandoned"]),
@@ -175,6 +204,42 @@ export default function NewIdeaPage() {
           <Field label="Title *" error={errors.title?.message}>
             <input {...register("title")} placeholder="Give your idea a memorable name..."
               style={inputBase} className="[color:#1a3a44] dark:[color:#e8eef8] focus:[border-color:#8FD3F4] focus:[box-shadow:0_0_0_4px_rgba(143,211,244,0.2)]" />
+          </Field>
+
+          {/* Summary — embedded for RAG/semantic search */}
+          <Field label="Summary * (used for AI search)" error={errors.summary?.message}>
+            {(() => {
+              // Inline IIFE so we can compute word count from watched value
+              const summaryValue = watch("summary") ?? "";
+              const wordCount = countWords(summaryValue);
+              const atLimit = wordCount >= SUMMARY_MAX_WORDS;
+              return (
+                <>
+                  <textarea
+                    {...register("summary")}
+                    onKeyDown={(e) => handleSummaryKeyDown(e, summaryValue)}
+                    placeholder={`Distil your idea into a clear, focused summary — max ${SUMMARY_MAX_WORDS} words. This is what the AI reads to find your idea.`}
+                    rows={3}
+                    style={{ ...inputBase, minHeight: 90, resize: "vertical" }}
+                    className="[color:#1a3a44] dark:[color:#e8eef8] focus:[border-color:#8FD3F4] focus:[box-shadow:0_0_0_4px_rgba(143,211,244,0.2)]"
+                  />
+                  {/* Word counter */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: "0.7rem", color: atLimit ? "#FF6B6B" : "#6b8fa0" }}>
+                      {atLimit
+                        ? "Word limit reached — add more detail in the description below."
+                        : "Concise summary for AI-powered search"}
+                    </span>
+                    <span style={{
+                      fontSize: "0.72rem", fontWeight: 600,
+                      color: atLimit ? "#FF6B6B" : wordCount > 170 ? "#f5a623" : "#6b8fa0",
+                    }}>
+                      {wordCount} / {SUMMARY_MAX_WORDS}
+                    </span>
+                  </div>
+                </>
+              );
+            })()}
           </Field>
 
           {/* Description */}
