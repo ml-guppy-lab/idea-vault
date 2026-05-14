@@ -511,16 +511,21 @@ async def update_idea(
         if v is not None
     }
 
-    # Re-embed in background when summary or title changes — keeps vector in
-    # sync without adding latency to the update response.
-    new_title = updates.get("title", doc["title"])
-    new_summary = updates.get("summary")
-    if new_summary or "title" in updates:
-        background_tasks.add_task(
-            _embed_and_store, db, oid,
-            new_title,
-            new_summary if new_summary else doc["summary"],
-        )
+    # Re-embed in background whenever title or summary changes.
+    #
+    # Embedding input = title + summary (design decision: description and tags
+    # are not embedded — tags are used as $vectorSearch pre-filters, description
+    # is retrieved post-search for display only).
+    #
+    # We compare new vs stored values so a no-op edit (sending the same title/
+    # summary that's already saved) doesn't trigger an unnecessary background task.
+    new_title   = updates.get("title",   doc.get("title",   ""))
+    new_summary = updates.get("summary", doc.get("summary", ""))
+    title_changed   = "title"   in updates and updates["title"]   != doc.get("title")
+    summary_changed = "summary" in updates and updates["summary"] != doc.get("summary")
+
+    if title_changed or summary_changed:
+        background_tasks.add_task(_embed_and_store, db, oid, new_title, new_summary)
 
     # --- always stamp updatedAt, even if no other field changed ---
     updates["updatedAt"] = datetime.now(timezone.utc)
