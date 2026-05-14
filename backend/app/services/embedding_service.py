@@ -21,9 +21,11 @@ def generate_embedding(text: str) -> list[float]:
     return model.encode(text).tolist()
 
 
-def generate_idea_embedding(summary: str) -> list[float]:
+def generate_idea_embedding(title: str, summary: str) -> list[float]:
+    # Title anchors the topic; summary provides semantic depth.
+    # Tags are used as $vectorSearch pre-filters, not embedded.
     """
-    Embed an idea's summary field only.
+    Embed an idea's title and summary fields.
 
     The summary is the single source of truth for vector search:
     - User is constrained to ≤190 words on the frontend
@@ -32,4 +34,5 @@ def generate_idea_embedding(summary: str) -> list[float]:
     This design avoids chunking complexity and produces high-quality, dense vectors.
     """
     # Strip to be safe; the frontend already enforces the word limit
-    return generate_embedding(summary.strip())
+    combined = f"{title}. {summary}"
+    return generate_embedding(combined.strip())
