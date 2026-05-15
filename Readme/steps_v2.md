@@ -140,3 +140,73 @@ RESEND_API_KEY=
 EMAIL_FROM=Idea Vault <onboarding@resend.dev>
 EMAIL_OVERRIDE_TO=themlguppie@gmail.com   # dev only — remove in production with a verified domain
 ```
+
+---
+
+## 5. Semantic Search via Embeddings (RAG Pipeline Foundation)
+
+**Why:** Keyword search (`$regex`) only matches exact words. A search for "productivity tool" won't find an idea titled "focus timer app". Embeddings encode semantic meaning — similar concepts score high regardless of exact wording.
+
+**Model: `all-MiniLM-L6-v2`**
+
+Chosen over `BAAI/bge-m3` (the other candidate):
+
+| | `all-MiniLM-L6-v2` ✅ | `BAAI/bge-m3` ❌ |
+|---|---|---|
+| Size | 90 MB | 2.3 GB |
+| Cold start | <1 s | 10–15 s |
+| Vector dims | 384 | 1024 |
+| Use case fit | Short English text | Multilingual, long context |
+
+bge-m3's advantages (multilingual, sparse retrieval) don't apply here. Paying the cost with zero benefit. MiniLM loads once via `@lru_cache` — all subsequent calls return the cached model instantly.
+
+**Accepted trade-off:** model swap (if ever needed) requires a re-backfill script. Documented and worth it.
+
+**What gets embedded — and what doesn't:**
+
+- `title + summary` → embedded together. Title anchors the topic; summary provides semantic depth.
+- `description` → stored for display, never embedded (unlimited length, retrieved post-search).
+- `tags` → used as `$vectorSearch` pre-filters (metadata), not embedded. Embedding keyword lists adds noise.
+- `summary` is capped at 190 words on the frontend, enforced at 1300 chars in the schema — guarantees no silent truncation by MiniLM's 256-token limit.
+
+**Write path — non-blocking:**
+
+```
+POST /ideas/create
+  → insert document (no embedding yet)
+  → return 201 immediately          ← user sees instant save
+  → BackgroundTasks fires after response
+      → asyncio.to_thread(model.encode)   ← CPU work off event loop
+      → db.ideas.update_one({$set: {embedding: [...]}})
+```
+
+Same pattern on update: re-embeds only when `title` or `summary` actually changed. No-op edits (status/priority/tags/description) skip it.
+
+**Scale note:** `BackgroundTasks` runs in-process — doesn't survive horizontal scale or process crash. Upgrade path: Celery + Redis broker (~1 day migration). MongoDB write is identical either way.
+
+**Backfill:**
+
+`backend/scripts/backfill_embeddings.py` — one-shot script for ideas that pre-date the embedding feature. Filter: `{"embedding": {"$exists": False}}` → idempotent, safe to re-run.
+
+```bash
+cd backend
+python -m scripts.backfill_embeddings          # live run
+python -m scripts.backfill_embeddings --dry-run # preview only
+```
+
+**What changed:**
+
+| File | Change |
+|---|---|
+| `backend/requirements.txt` | Added `sentence-transformers>=3.0.0` |
+| `backend/app/services/embedding_service.py` | `get_embedding_model()` (lru_cache), `generate_embedding()`, `generate_idea_embedding(title, summary)` |
+| `backend/app/schemas/idea.py` | Added `summary: str` (required, max 1300 chars) to `IdeaCreate`, `IdeaUpdate`, `IdeaResponse`, `IdeaInDB` |
+| `backend/app/api/ideas.py` | `_embed_and_store()` background task; `BackgroundTasks` injected into create + update; re-embed guard on update |
+| `backend/scripts/backfill_embeddings.py` | Backfill script for pre-existing ideas |
+| `frontend/app/dashboard/ideas/new/page.tsx` | Summary field with live word counter (190-word limit, turns red at limit) |
+| `frontend/app/dashboard/ideas/[id]/page.tsx` | Same summary field in edit mode; summary displayed in view mode |
+
+**Required `requirements.txt` addition:**
+```
+sentence-transformers>=3.0.0
+```
