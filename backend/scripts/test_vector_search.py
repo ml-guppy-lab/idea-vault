@@ -70,7 +70,7 @@ async def main() -> None:
                     limit=3,
                 )
                 if not results:
-                    print("  No results returned (index may still be building, "
+                    print(" [{score:.3f}] No results returned (index may still be building, "
                           "or no ideas match this user).")
                 for r in results:
                     score = r.get("score", 0)

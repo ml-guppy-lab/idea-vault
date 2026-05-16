@@ -20,7 +20,7 @@ async def search_similar_ideas(
     db: AsyncIOMotorDatabase,
     limit: int = 5,
     tag: str | None = None,
-    min_score: float = 0.70,
+    min_score: float = 0.60,
 ) -> list[dict]:
     """
     Return the top-N ideas most semantically similar to `query`.
@@ -48,8 +48,11 @@ async def search_similar_ideas(
                    whose `tags` array contains this value before vector scoring.
         min_score: Minimum cosine similarity (0–1) a result must reach to be
                    returned. Prevents returning irrelevant ideas just because
-                   they are the closest match in a small dataset. Default 0.70
-                   is calibrated for MiniLM on short English summaries.
+                   they are the closest match in a small dataset. 0.60 is the
+                   practical floor for MiniLM on short summaries — below this
+                   the model has insufficient signal to discriminate. Summaries
+                   of 3–5 dense sentences will naturally push relevant scores
+                   above 0.80 and irrelevant ones below 0.55.
     """
     # Embed the query in the same vector space as the stored idea embeddings.
     # model.encode() is CPU-bound; offload to thread pool so the event loop
