@@ -20,6 +20,7 @@ async def search_similar_ideas(
     db: AsyncIOMotorDatabase,
     limit: int = 5,
     tag: str | None = None,
+    min_score: float = 0.70,
 ) -> list[dict]:
     """
     Return the top-N ideas most semantically similar to `query`.
@@ -42,9 +43,13 @@ async def search_similar_ideas(
         user_id:  Authenticated user's ID (string). Injected by the route from
                   the JWT — never accepted from the client directly.
         db:       Motor database instance (injected via FastAPI dependency).
-        limit:    Max results to return (default 5, max enforced by the route).
-        tag:      Optional tag pre-filter. Narrows the candidate set to ideas
-                  whose `tags` array contains this value before vector scoring.
+        limit:     Max results to return (default 5, max enforced by the route).
+        tag:       Optional tag pre-filter. Narrows the candidate set to ideas
+                   whose `tags` array contains this value before vector scoring.
+        min_score: Minimum cosine similarity (0–1) a result must reach to be
+                   returned. Prevents returning irrelevant ideas just because
+                   they are the closest match in a small dataset. Default 0.70
+                   is calibrated for MiniLM on short English summaries.
     """
     # Embed the query in the same vector space as the stored idea embeddings.
     # model.encode() is CPU-bound; offload to thread pool so the event loop
@@ -90,12 +95,19 @@ async def search_similar_ideas(
                 "createdAt": 1,
                 "updatedAt": 1,
                 # Cosine similarity score (0 = unrelated, 1 = identical).
+                # Exposed so the frontend can optionally show relevance.
                 "score": {"$meta": "vectorSearchScore"},
                 # `embedding` is not listed here so MongoDB excludes it
                 # automatically — inclusion projections drop all unlisted fields.
                 # (Mixing embedding:0 with other field:1 causes a MongoDB error.)
             }
         },
+        # Drop results below the minimum similarity threshold.
+        # Without this, $vectorSearch always returns `limit` results even when
+        # the best match is irrelevant — e.g. returning a health app for a
+        # "machine learning" query just because it's the only document.
+        # 0.70 is a reasonable cutoff for MiniLM cosine similarity on short text.
+        {"$match": {"score": {"$gte": min_score}}},
     ]
 
     docs = await db.ideas.aggregate(pipeline).to_list(limit)

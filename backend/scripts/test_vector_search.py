@@ -37,7 +37,12 @@ async def main() -> None:
 
     try:
         # ── Pick a real userId from the DB so filter returns real results ──────
-        sample = await db.ideas.find_one({}, {"userId": 1, "title": 1})
+        # Prefer an idea that has a non-trivial summary so semantic scores are
+        # meaningful. Falls back to the first document if none found.
+        sample = await db.ideas.find_one(
+            {"summary": {"$exists": True, "$not": {"$in": [None, ""]}}},
+            {"userId": 1, "title": 1, "summary": 1},
+        ) or await db.ideas.find_one({}, {"userId": 1, "title": 1, "summary": 1})
         if sample is None:
             print("No ideas found in the database. Create some ideas first.")
             return
@@ -45,13 +50,14 @@ async def main() -> None:
         user_id = sample["userId"]
         print(f"Testing with userId: {user_id}")
         print(f"Sample idea: \"{sample.get('title', '(no title)')}\"")
+        print(f"Summary: \"{sample.get('summary', '(none)')}\"")
         print("-" * 60)
 
-        # ── Run several queries to verify semantic matching ────────────────────
+        # ── Run queries relevant to the actual content in Atlas ───────────────
         test_queries = [
-            "toggle",
-            "mobile app for health",
-            "machine learning project",
+            "health and fitness tracking",
+            "calorie and water intake",
+            "machine learning website",
         ]
 
         for query in test_queries:
