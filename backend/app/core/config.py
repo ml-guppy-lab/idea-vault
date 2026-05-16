@@ -66,6 +66,17 @@ class Settings(BaseSettings):
     # address instead of the real recipient. Remove in production.
     EMAIL_OVERRIDE_TO: str = ""
 
+    # LLM — switch providers by changing LLM_PROVIDER in .env
+    # Supported: "ollama" (local) | "openrouter" (deployed) | "openai" | "anthropic"
+    LLM_PROVIDER: str = "ollama"
+    LLM_OLLAMA_MODEL: str = "qwen3:14b"
+    LLM_OPENROUTER_MODEL: str = "google/gemma-4-31b-it:free"
+    LLM_OPENAI_MODEL: str = "gpt-4o-mini"
+    LLM_ANTHROPIC_MODEL: str = "claude-3-5-haiku-20241022"
+    OPENROUTER_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
+    ANTHROPIC_API_KEY: str = ""
+
     # Cloudinary — image storage
     CLOUDINARY_CLOUD_NAME: str = ""
     CLOUDINARY_API_KEY: str = ""
