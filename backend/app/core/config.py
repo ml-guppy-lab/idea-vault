@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "ollama"
     LLM_OLLAMA_MODEL: str = "qwen3:14b"
     LLM_OPENROUTER_MODEL: str = "google/gemma-4-31b-it:free"
+    # Fallback used automatically when the primary model is rate-limited (429).
+    # gpt-oss-120b is a 117B MoE model — low latency (5.1B active params) + native CoT.
+    LLM_OPENROUTER_FALLBACK_MODEL: str = "openai/gpt-oss-120b:free"
     LLM_OPENAI_MODEL: str = "gpt-4o-mini"
     LLM_ANTHROPIC_MODEL: str = "claude-3-5-haiku-20241022"
     OPENROUTER_API_KEY: str = ""

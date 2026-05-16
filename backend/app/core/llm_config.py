@@ -65,13 +65,24 @@ class LLMConfig:
 
     @property
     def model(self) -> str:
-        """Model identifier as expected by the provider."""
+        """Primary model identifier as expected by the provider."""
         return {
             LLMProvider.ollama: settings.LLM_OLLAMA_MODEL,
             LLMProvider.openrouter: settings.LLM_OPENROUTER_MODEL,
             LLMProvider.openai: settings.LLM_OPENAI_MODEL,
             LLMProvider.anthropic: settings.LLM_ANTHROPIC_MODEL,
         }[self.provider]
+
+    @property
+    def fallback_model(self) -> str | None:
+        """
+        Fallback model used when the primary is rate-limited (429).
+        Only defined for OpenRouter — other providers handle fallback differently.
+        None means no fallback is configured for this provider.
+        """
+        if self.provider == LLMProvider.openrouter:
+            return settings.LLM_OPENROUTER_FALLBACK_MODEL
+        return None
 
     @property
     def api_key(self) -> str:
