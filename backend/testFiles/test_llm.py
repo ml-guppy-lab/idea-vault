@@ -1,3 +1,5 @@
+# to test, from backend folder run `python testFiles/test_llm.py`
+
 """
 Manual smoke-test for the LLM abstraction layer.
 
@@ -97,10 +99,11 @@ async def test() -> None:
         client.chat.completions.create,
         model=llm_config.model,
         messages=[
+            {"role": "system", "content": "Be concise. Keep reasoning brief."},
             {"role": "user", "content": "Count from 1 to 5, one number per word."},
         ],
         stream=True,
-        max_tokens=600,
+        max_tokens=2000,  # qwen3 thinking can be 500-1000 tokens; reply needs headroom too
     )
     thinking_text = ""
     reply_text = ""
@@ -155,9 +158,12 @@ async def test() -> None:
     stream2 = await _call_with_retry(
         client.chat.completions.create,
         model=llm_config.model,
-        messages=[{"role": "user", "content": "What is 2+2? Think step by step."}],
+        messages=[
+            {"role": "system", "content": "Be concise. Keep reasoning brief."},
+            {"role": "user", "content": "What is 2+2?"},
+        ],
         stream=True,
-        max_tokens=400,
+        max_tokens=2000,
         **extra_params,
     )
 
@@ -192,4 +198,55 @@ async def test() -> None:
     print("=" * 50)
 
 
-asyncio.run(test())
+def _print_error(label: str, exc: BaseException) -> None:
+    """Print a clean, human-readable error block instead of a raw Python traceback."""
+    from openai import APIConnectionError, APIStatusError, AuthenticationError  # noqa: PLC0415
+
+    print(f"\n{'=' * 50}")
+    print(f"  FAILED: {label}")
+    print(f"{'=' * 50}")
+
+    if isinstance(exc, AuthenticationError):
+        print("  ✗ Auth error — bad or missing API key")
+        print(f"    Provider : {llm_config.provider.value}")
+        print(f"    Key set  : {'yes' if llm_config.api_key not in ('', 'ollama') else 'no'}")
+        print("    Fix      : check OPENROUTER_API_KEY / OPENAI_API_KEY in .env")
+
+    elif isinstance(exc, RateLimitError):
+        print("  ✗ Rate limited — all retries + fallback exhausted")
+        print(f"    Model    : {llm_config.model}")
+        print(f"    Fallback : {llm_config.fallback_model or 'none configured'}")
+        print("    Fix      : wait a few minutes, or add a paid key to bypass shared limits")
+
+    elif isinstance(exc, APIConnectionError):
+        print("  ✗ Connection error — could not reach the LLM endpoint")
+        print(f"    URL      : {llm_config.base_url}")
+        if llm_config.provider.value == "ollama":
+            print("    Fix      : run `ollama serve` — Ollama is not running")
+        else:
+            print("    Fix      : check internet connection / OpenRouter status")
+
+    elif isinstance(exc, APIStatusError):
+        print(f"  ✗ API error {exc.status_code}: {exc.message}")
+        print(f"    Model    : {llm_config.model}")
+
+    elif isinstance(exc, AssertionError):
+        print(f"  ✗ Assertion failed: {exc}")
+        print("    The LLM responded but the content was empty or wrong.")
+        print("    Likely cause: max_tokens too low — thinking used all the budget.")
+
+    else:
+        print(f"  ✗ Unexpected error: {type(exc).__name__}: {exc}")
+
+    print("=" * 50)
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(test())
+    except KeyboardInterrupt:
+        print("\n\nInterrupted.")
+        sys.exit(0)
+    except BaseException as exc:
+        _print_error(type(exc).__name__, exc)
