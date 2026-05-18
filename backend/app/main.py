@@ -30,7 +30,7 @@ if not _app_log.handlers:
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.api import auth, ideas, profile
+from app.api import auth, ideas, profile, chat
 from app.core.config import settings
 from app.db.postgres import init_db
 from app.db.mongodb import close_mongo_connection, connect_to_mongo
@@ -85,6 +85,7 @@ app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
 app.include_router(auth.router, prefix="/api")
 app.include_router(ideas.router, prefix="/api")
 app.include_router(profile.router, prefix="/api")
+app.include_router(chat.router, prefix="/api")
 
 
 @app.get("/health", tags=["health"])
