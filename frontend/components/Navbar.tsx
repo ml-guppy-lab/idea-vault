@@ -14,6 +14,7 @@ import {
   X,
   Menu,
   Loader2,
+  Sparkles,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -30,6 +31,7 @@ interface NavbarProps {
 
 const NAV_LINKS = [
   { label: "Dashboard", href: "/dashboard",          icon: LayoutDashboard },
+  { label: "Vault AI",  href: "/dashboard/chat",    icon: Sparkles },
   { label: "Profile",   href: "/dashboard/profile",  icon: User },
   { label: "Settings",  href: "/dashboard/settings", icon: Settings },
 ];
@@ -132,7 +134,10 @@ export default function Navbar({ user }: NavbarProps) {
     onClick?: () => void;
     mobile?: boolean;
   }) {
-    const isActive = pathname === href || pathname.startsWith(href + "/");
+    const isActive =
+      href === "/dashboard"
+        ? pathname === "/dashboard"           // exact match — avoids false highlight on sub-routes
+        : pathname === href || pathname.startsWith(href + "/");
     const [hovered, setHovered] = useState(false);
 
     return (

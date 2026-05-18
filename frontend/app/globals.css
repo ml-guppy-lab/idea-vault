@@ -169,3 +169,18 @@
 .dark .shimmer {
   background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.05) 50%, transparent 100%);
 }
+
+/* Vault AI chat — blinking cursor while streaming */
+@keyframes vault-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+.vault-ai-cursor {
+  animation: vault-blink 1s step-end infinite;
+}
+
+/* Vault AI widget — slide-up entrance animation */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

@@ -2,8 +2,10 @@
 
 import { useState, useMemo } from "react";
 import Link from "next/link";
-import { Search, Plus } from "lucide-react";
+import { Search, Plus, Sparkles, X } from "lucide-react";
+import { useTheme } from "next-themes";
 import IdeaCard from "@/components/IdeaCard";
+import ChatWindow from "@/components/chat/ChatWindow";
 
 type Status = "Raw" | "Exploring" | "Validated" | "Building" | "Shipped" | "Abandoned";
 type Priority = "Low" | "Medium" | "High";
@@ -93,9 +95,11 @@ export default function DashboardClient({ ideas, userName, loading }: {
     return matchesFilter && matchesQuery;
   }), [ideas, filter, query]);
 
-  const isDark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
 
   return (
+    <>
     <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
 
       {/* Welcome header */}
@@ -181,6 +185,88 @@ export default function DashboardClient({ ideas, userName, loading }: {
         <div style={{ width: 20, height: 20, borderRadius: 6, background: "linear-gradient(135deg,#A8E6CF,#7ecbf0,#C7CEEA)", boxShadow: "0 2px 8px rgba(0,0,0,0.15)", flexShrink: 0 }} />
         <span className="text-xs text-[#6b8fa0] opacity-70 font-medium">Built by The ML Guppy</span>
       </div>
+    </div>
+
+    {/* Floating Vault AI widget — fixed bottom-right of the viewport */}
+    <VaultAIWidget isDark={isDark} />
+    </>
+  );
+}
+
+// ── Floating Vault AI widget ──────────────────────────────────────────────────
+
+function VaultAIWidget({ isDark }: { isDark: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        bottom: 24,
+        right: 24,
+        zIndex: 200,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-end",
+        gap: 10,
+        // Prevent the widget from capturing pointer events when collapsed
+        pointerEvents: "auto",
+      }}
+    >
+      {/* Chat panel — shown when open */}
+      {open && (
+        <div
+          style={{
+            width: 360,
+            height: 480,
+            borderRadius: 24,
+            overflow: "hidden",
+            border: isDark
+              ? "1px solid rgba(180,160,240,0.25)"
+              : "1px solid rgba(170,200,215,0.5)",
+            boxShadow: isDark
+              ? "0 24px 56px rgba(0,0,0,0.55)"
+              : "0 24px 56px rgba(80,120,140,0.22)",
+            display: "flex",
+            flexDirection: "column",
+            // Smooth slide-in via opacity — no layout shift
+            animation: "fadeUp 0.2s ease",
+          }}
+          className="[background:rgba(255,255,255,0.96)] [backdrop-filter:blur(20px)] dark:[background:rgba(14,20,36,0.96)]"
+        >
+          <ChatWindow compact onClose={() => setOpen(false)} />
+        </div>
+      )}
+
+      {/* Trigger pill button */}
+      <button
+        onClick={() => setOpen((o) => !o)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        aria-label={open ? "Close Vault AI" : "Open Vault AI"}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "0.45rem",
+          padding: "0.65rem 1.3rem",
+          borderRadius: 50,
+          border: "none",
+          cursor: "pointer",
+          fontSize: "0.9rem",
+          fontWeight: 700,
+          color: "#fff",
+          boxShadow: hovered
+            ? "0 16px 36px rgba(0,0,0,0.35)"
+            : "0 8px 24px rgba(0,0,0,0.22)",
+          transform: hovered ? "translateY(-3px)" : "translateY(0)",
+          transition: "all 0.25s ease",
+        }}
+        className="[background:linear-gradient(135deg,#3d7a8c,#1e4d5c)] dark:[background:linear-gradient(135deg,#9b7cf0,#5db8fe)] dark:[color:#0a0f1a]"
+      >
+        {open ? <X size={16} /> : <Sparkles size={16} />}
+        {open ? "Close" : "Vault AI"}
+      </button>
     </div>
   );
 }
