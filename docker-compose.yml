@@ -12,15 +12,14 @@ services:
     environment:
       # Override localhost URLs from .env with Docker service names.
       # env_file is read first; environment block takes precedence.
+      # MONGO_URI is intentionally NOT overridden here — it points to Atlas
+      # (set in backend/.env) and must not be redirected to a local container.
       DATABASE_URL: postgresql+asyncpg://idea_user:idea_pass@postgres:5432/idea_vault_auth
-      MONGO_URI: mongodb://idea_user:idea_pass@mongo:27017/idea_vault?authSource=admin
       REDIS_URL: redis://redis:6379
     volumes:
       - ./backend:/app          # live-reload in development
     depends_on:
       postgres:
-        condition: service_healthy
-      mongo:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -63,25 +62,28 @@ services:
       retries: 5
     networks:
       - app-network
+  
 
+###### this MongoDB service is commented out because we're using MongoDB Atlas for the vector search feature, 
+###### But you can uncomment and use it for local development if desired. Just remember to update the MONGO_URI in the .env file accordingly. ######
   # ── MongoDB ───────────────────────────────────────────────────────────────────
-  mongo:
-    image: mongo:7
-    ports:
-      - "27017:27017"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-idea_user}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-idea_pass}
-      MONGO_INITDB_DATABASE: ${MONGO_DB:-idea_vault}
-    volumes:
-      - mongo_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - app-network
+  # mongo:
+  #   image: mongo:7
+  #   ports:
+  #     - "27017:27017"
+  #   environment:
+  #     MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-idea_user}
+  #     MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-idea_pass}
+  #     MONGO_INITDB_DATABASE: ${MONGO_DB:-idea_vault}
+  #   volumes:
+  #     - mongo_data:/data/db
+  #   healthcheck:
+  #     test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   networks:
+  #     - app-network
 
   # ── Redis ─────────────────────────────────────────────────────────────────────
   redis:
