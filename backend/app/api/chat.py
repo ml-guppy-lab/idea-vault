@@ -18,17 +18,46 @@ reply in separate UI sections, and to know when to hide the loading spinner.
 
 import json
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
+import redis.asyncio as aioredis
 
 from app.core.security import get_current_user
 from app.db.mongodb import get_mongo_db
+from app.db.redis import get_redis
 from app.models.user import User
 from app.schemas.chat import ChatRequest
 from app.services.rag_service import stream_rag_response
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+# ── Rate-limit constants ───────────────────────────────────────────────────────
+_RATE_LIMIT_MAX = 20        # messages allowed per window
+_RATE_LIMIT_WINDOW = 3600   # window size in seconds (1 hour)
+
+
+async def _check_rate_limit(user_id: str, redis: aioredis.Redis) -> None:
+    """
+    Sliding-window rate limiter: max 20 chat messages per user per hour.
+
+    Key: "chat_rl:{user_id}"  (namespaced to avoid collisions with other keys)
+    - INCR atomically creates-or-increments the counter.
+    - EXPIRE is set only on the first message so the window resets naturally
+      after 1 hour without any background job.
+    - Raises HTTP 429 before the RAG pipeline starts, so no LLM tokens are
+      consumed for over-limit requests.
+    """
+    key = f"chat_rl:{user_id}"
+    count = await redis.incr(key)
+    if count == 1:
+        # First message in this window — start the 1-hour expiry clock.
+        await redis.expire(key, _RATE_LIMIT_WINDOW)
+    if count > _RATE_LIMIT_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Chat limit reached. You can send {_RATE_LIMIT_MAX} messages per hour.",
+        )
 
 
 @router.post(
@@ -40,6 +69,7 @@ async def chat(
     request: ChatRequest,
     current_user: User = Depends(get_current_user),    # JWT auth gate
     db: AsyncIOMotorDatabase = Depends(get_mongo_db),  # Motor DB dependency
+    redis: aioredis.Redis = Depends(get_redis),        # Redis for rate limiting
 ) -> StreamingResponse:
     """
     Run the full RAG pipeline and stream the response as Server-Sent Events.
@@ -48,11 +78,16 @@ async def chat(
       This ensures a user can only query their own ideas.
     - The message is validated by ChatRequest (max 500 chars) before reaching
       the RAG service, providing defence-in-depth against prompt injection.
+    - Rate limit is checked before touching the LLM — over-limit requests are
+      rejected immediately without consuming any LLM tokens.
     - If the LLM is rate-limited, the service retries with backoff and falls
       back to the configured secondary model — the client sees an `error` event
       only if all retries are exhausted.
     """
     user_id = str(current_user.id)
+
+    # Reject before starting the stream — 429 is a plain JSON response.
+    await _check_rate_limit(user_id, redis)
 
     async def _event_generator():
         """Serialise typed event dicts from rag_service into SSE format."""
