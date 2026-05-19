@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     # LLM — switch providers by changing LLM_PROVIDER in .env
     # Supported: "ollama" (local) | "openrouter" (deployed) | "openai" | "anthropic"
     LLM_PROVIDER: str = "ollama"
+    # Ollama base URL — override in docker-compose to reach the Mac host.
+    # Local (outside Docker): http://localhost:11434/v1
+    # Inside Docker:          http://host.docker.internal:11434/v1
+    LLM_OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
     LLM_OLLAMA_MODEL: str = "qwen3:14b"
     LLM_OPENROUTER_MODEL: str = "google/gemma-4-31b-it:free"
     # Fallback used automatically when the primary model is rate-limited (429).

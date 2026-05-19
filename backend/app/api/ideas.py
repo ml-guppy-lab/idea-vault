@@ -7,6 +7,7 @@ PostgreSQL. The `userId` stored on every idea document is that user's id string.
 """
 
 import asyncio
+import logging
 import re
 from datetime import datetime, timezone
 
@@ -22,6 +23,7 @@ from app.schemas.idea import IdeaCreate, IdeaListResponse, IdeaResponse, IdeaSta
 from app.services.embedding_service import generate_idea_embedding
 
 router = APIRouter(prefix="/ideas", tags=["ideas"])
+_log = logging.getLogger("app.ideas")
 
 
 async def _embed_and_store(db: AsyncIOMotorDatabase, idea_id: ObjectId, title: str, summary: str) -> None:
@@ -33,8 +35,14 @@ async def _embed_and_store(db: AsyncIOMotorDatabase, idea_id: ObjectId, title: s
     offload it to a thread pool via asyncio.to_thread to avoid blocking the
     event loop while it runs.
     """
-    embedding = await asyncio.to_thread(generate_idea_embedding, title, summary)
-    await db.ideas.update_one({"_id": idea_id}, {"$set": {"embedding": embedding}})
+    try:
+        _log.debug("Embedding idea %s: title=%r summary=%r", idea_id, title[:40], (summary or "")[:40])
+        embedding = await asyncio.to_thread(generate_idea_embedding, title, summary)
+        await db.ideas.update_one({"_id": idea_id}, {"$set": {"embedding": embedding}})
+        _log.debug("Embedding stored for idea %s (%d dims)", idea_id, len(embedding))
+    except Exception:
+        # Log the full traceback so silent failures become visible in Docker logs
+        _log.exception("Failed to generate/store embedding for idea %s", idea_id)
 
 
 def _serialize_idea(doc: dict) -> dict:
@@ -77,7 +85,7 @@ async def create_idea(
     # an instant save. The embedding field is added async moments later.
     document = {
         **payload.model_dump(),   # title, summary, description, tags, status, priority
-        "userId": current_user.id,
+        "userId": str(current_user.id),   # always store as string — vector search filter compares strings
         "createdAt": now,
         "updatedAt": now,
     }
@@ -203,7 +211,7 @@ async def list_ideas(
         )
 
     # --- base filter: only this user's ideas ---
-    query_filter: dict = {"userId": current_user.id}
+    query_filter: dict = {"userId": str(current_user.id)}
 
     # --- apply optional filters ---
     # Each filter is only added to the query when the param was actually
@@ -342,7 +350,7 @@ async def search_ideas(
     # can narrow down the candidate set before applying the more expensive
     # regex scan on title/description.
     query_filter = {
-        "userId": current_user.id,
+        "userId": str(current_user.id),
         "$or": [
             {"title": regex_pattern},
             {"description": regex_pattern},
@@ -442,7 +450,7 @@ async def get_idea(
     # 403 is intentional: it tells the caller "you're authenticated but
     # not allowed", which is more accurate than pretending the resource
     # doesn't exist — and it prevents ID-enumeration via 404 vs 403 diff.
-    if doc["userId"] != current_user.id:
+    if doc["userId"] != str(current_user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to access this idea",
@@ -491,7 +499,7 @@ async def update_idea(
 
     # --- ownership check: 403 if the idea belongs to someone else ---
     # Returning 403 (not 404) is intentional — see GET /ideas/{id} for rationale.
-    if doc["userId"] != current_user.id:
+    if doc["userId"] != str(current_user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to update this idea",
@@ -580,7 +588,7 @@ async def delete_idea(
         )
 
     # --- ownership check: 403 if the idea belongs to someone else ---
-    if doc["userId"] != current_user.id:
+    if doc["userId"] != str(current_user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to delete this idea",

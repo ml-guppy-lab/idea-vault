@@ -1,4 +1,4 @@
-# Run it from backend: python -m scripts.test_vector_search
+# Run it from backend: python -m testFiles.test_vector_search
 
 """
 Manual test script for the MongoDB Atlas vector search pipeline.
@@ -8,7 +8,7 @@ a $vectorSearch query so you can verify the index is active and results look
 sensible BEFORE wiring this into the API.
 
 Usage (from backend/):
-    python -m scripts.test_vector_search
+    python -m testFiles.test_vector_search
 
 The script will:
   1. Connect to MongoDB Atlas.

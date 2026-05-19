@@ -57,7 +57,7 @@ class LLMConfig:
     def base_url(self) -> str:
         """Base URL for the OpenAI-compatible /v1 REST API."""
         return {
-            LLMProvider.ollama: "http://localhost:11434/v1",
+            LLMProvider.ollama: settings.LLM_OLLAMA_BASE_URL,
             LLMProvider.openrouter: "https://openrouter.ai/api/v1",
             LLMProvider.openai: "https://api.openai.com/v1",
             LLMProvider.anthropic: "https://api.anthropic.com/v1",

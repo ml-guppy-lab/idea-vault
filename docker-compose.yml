@@ -16,6 +16,9 @@ services:
       # (set in backend/.env) and must not be redirected to a local container.
       DATABASE_URL: postgresql+asyncpg://idea_user:idea_pass@postgres:5432/idea_vault_auth
       REDIS_URL: redis://redis:6379
+      # Ollama runs on the Mac host, not inside Docker.
+      # host.docker.internal resolves to the host machine from within a container.
+      LLM_OLLAMA_BASE_URL: http://host.docker.internal:11434/v1
     volumes:
       - ./backend:/app          # live-reload in development
     depends_on:
