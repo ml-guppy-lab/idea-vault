@@ -79,9 +79,10 @@ function NewIdeaButton({ fullWidth = false }: { fullWidth?: boolean }) {
 
 // ── Main client component ─────────────────────────────────────────────────────
 
-export default function DashboardClient({ ideas, userName, loading }: {
+export default function DashboardClient({ ideas, userName, userId, loading }: {
   ideas: Idea[];
   userName: string;
+  userId: string;
   loading?: boolean;
 }) {
   const [query, setQuery]       = useState("");
@@ -188,14 +189,14 @@ export default function DashboardClient({ ideas, userName, loading }: {
     </div>
 
     {/* Floating Vault AI widget — fixed bottom-right of the viewport */}
-    <VaultAIWidget isDark={isDark} />
+    <VaultAIWidget isDark={isDark} userId={userId} />
     </>
   );
 }
 
 // ── Floating Vault AI widget ──────────────────────────────────────────────────
 
-function VaultAIWidget({ isDark }: { isDark: boolean }) {
+function VaultAIWidget({ isDark, userId }: { isDark: boolean; userId: string }) {
   const [open, setOpen] = useState(false);
   const [hovered, setHovered] = useState(false);
 
@@ -235,7 +236,7 @@ function VaultAIWidget({ isDark }: { isDark: boolean }) {
           }}
           className="[background:rgba(255,255,255,0.96)] [backdrop-filter:blur(20px)] dark:[background:rgba(14,20,36,0.96)]"
         >
-          <ChatWindow compact onClose={() => setOpen(false)} />
+          <ChatWindow userId={userId} compact onClose={() => setOpen(false)} />
         </div>
       )}
 

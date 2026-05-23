@@ -2,16 +2,37 @@
  * /dashboard/chat — Full-page Vault AI chat.
  *
  * Rendered inside the existing DashboardLayout so the Navbar is present.
- * ChatWindow reads history from sessionStorage, so any conversation started
- * in the floating widget continues seamlessly here.
+ * ChatWindow reads history from sessionStorage keyed by userId, so history
+ * is isolated per account and survives navigation from the floating widget.
  */
 
+import { cookies } from "next/headers";
 import ChatWindow from "@/components/chat/ChatWindow";
 import { Sparkles } from "lucide-react";
 
 export const metadata = { title: "Vault AI — Idea Vault" };
 
-export default function ChatPage() {
+const API = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+
+async function getUserId(): Promise<string> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get("access_token")?.value;
+  if (!token) return "";
+  try {
+    const res = await fetch(`${API}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return "";
+    const data = await res.json() as { id: string };
+    return data.id;
+  } catch {
+    return "";
+  }
+}
+
+export default async function ChatPage() {
+  const userId = await getUserId();
   return (
     <div
       style={{
@@ -67,8 +88,8 @@ export default function ChatPage() {
           dark:[background:rgba(16,22,38,0.9)] dark:[border-color:rgba(180,160,240,0.25)]
         "
       >
-        {/* fullPage ChatWindow — no compact controls */}
-        <ChatWindow />
+        {/* fullPage ChatWindow — history scoped to this user's account */}
+        <ChatWindow userId={userId} />
       </div>
     </div>
   );
