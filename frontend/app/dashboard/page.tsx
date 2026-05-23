@@ -42,12 +42,13 @@ async function getUser(token: string) {
     const res = await fetch(`${API}/auth/me`, {
       headers: { Authorization: `Bearer ${token}` }, cache: "no-store",
     });
-    if (!res.ok) return "there";
-    const data = await res.json() as { email: string };
+    if (!res.ok) return { name: "there", userId: "" };
+    const data = await res.json() as { id: string; email: string };
     const username = data.email.split("@")[0];
-    return username.split(/[._-]/).map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+    const name = username.split(/[._-]/).map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+    return { name, userId: data.id };
   } catch {
-    return "there";
+    return { name: "there", userId: "" };
   }
 }
 
@@ -55,8 +56,8 @@ export default async function DashboardPage() {
   const cookieStore = await cookies();
   const token = cookieStore.get("access_token")?.value ?? "";
 
-  const [ideas, userName] = await Promise.all([fetchIdeas(token), getUser(token)]);
+  const [ideas, user] = await Promise.all([fetchIdeas(token), getUser(token)]);
 
-  return <DashboardClient ideas={ideas} userName={userName} />;
+  return <DashboardClient ideas={ideas} userName={user.name} userId={user.userId} />;
 }
 

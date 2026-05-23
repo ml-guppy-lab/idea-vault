@@ -13,9 +13,9 @@
  *       full     → full-page layout at /dashboard/chat
  *
  * State persistence:
- *   Messages are saved to sessionStorage under "vault_ai_chat" whenever a
- *   stream completes. Both the widget and the full page read the same key, so
- *   history is never lost when the user clicks "Brainstorm with Vault AI".
+ *   Messages are saved to sessionStorage under "vault_ai_chat_{userId}" so
+ *   each user has an isolated history. Switching accounts in the same tab
+ *   never leaks one user's conversation to another.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -25,9 +25,11 @@ import { Sparkles, Maximize2, X, Trash2 } from "lucide-react";
 import MessageBubble, { Message } from "./MessageBubble";
 import ChatInput from "./ChatInput";
 
-// ── Constants ──────────────────────────────────────────────────────────────────
+// ── Storage key — scoped per user so accounts never share history ─────────────
 
-const SESSION_KEY = "vault_ai_chat";
+function sessionKey(userId: string) {
+  return `vault_ai_chat_${userId}`;
+}
 
 const WELCOME: Message = {
   id: "welcome",
@@ -38,10 +40,10 @@ const WELCOME: Message = {
 
 // ── sessionStorage helpers ────────────────────────────────────────────────────
 
-function loadMessages(): Message[] {
+function loadMessages(userId: string): Message[] {
   if (typeof window === "undefined") return [WELCOME];
   try {
-    const raw = sessionStorage.getItem(SESSION_KEY);
+    const raw = sessionStorage.getItem(sessionKey(userId));
     if (!raw) return [WELCOME];
     const parsed = JSON.parse(raw) as Message[];
     return parsed.length ? parsed : [WELCOME];
@@ -50,10 +52,10 @@ function loadMessages(): Message[] {
   }
 }
 
-function saveMessages(msgs: Message[]) {
+function saveMessages(userId: string, msgs: Message[]) {
   if (typeof window === "undefined") return;
   try {
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify(msgs));
+    sessionStorage.setItem(sessionKey(userId), JSON.stringify(msgs));
   } catch {
     // sessionStorage quota exceeded or unavailable — fail silently
   }
@@ -62,19 +64,21 @@ function saveMessages(msgs: Message[]) {
 // ── ChatWindow ────────────────────────────────────────────────────────────────
 
 interface ChatWindowProps {
+  /** The authenticated user's ID — used to scope sessionStorage per account. */
+  userId: string;
   /** Widget mode: constrained height, expand/close buttons visible. */
   compact?: boolean;
   /** Called when the user clicks the X button in compact mode. */
   onClose?: () => void;
 }
 
-export default function ChatWindow({ compact = false, onClose }: ChatWindowProps) {
+export default function ChatWindow({ userId, compact = false, onClose }: ChatWindowProps) {
   const router = useRouter();
   const { theme } = useTheme();
   const isDark = theme === "dark";
 
-  // Load history from sessionStorage on first render
-  const [messages, setMessages] = useState<Message[]>(() => loadMessages());
+  // Load history scoped to this user — different accounts never share history
+  const [messages, setMessages] = useState<Message[]>(() => loadMessages(userId));
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState("");
 
@@ -82,8 +86,8 @@ export default function ChatWindow({ compact = false, onClose }: ChatWindowProps
 
   // Persist completed messages to sessionStorage after each exchange
   useEffect(() => {
-    if (!streaming) saveMessages(messages);
-  }, [messages, streaming]);
+    if (!streaming) saveMessages(userId, messages);
+  }, [messages, streaming, userId]);
 
   // Auto-scroll to the latest message
   useEffect(() => {
@@ -208,7 +212,7 @@ export default function ChatWindow({ compact = false, onClose }: ChatWindowProps
   function clearChat() {
     const fresh = [WELCOME];
     setMessages(fresh);
-    saveMessages(fresh);
+    saveMessages(userId, fresh);
     setError("");
   }
 
