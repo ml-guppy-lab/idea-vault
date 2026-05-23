@@ -24,6 +24,7 @@ import { useTheme } from "next-themes";
 import { Sparkles, Maximize2, X, Trash2 } from "lucide-react";
 import MessageBubble, { Message } from "./MessageBubble";
 import ChatInput from "./ChatInput";
+import { StatusIndicator } from "./StatusIndicator";
 
 // ── Storage key — scoped per user so accounts never share history ─────────────
 
@@ -81,6 +82,9 @@ export default function ChatWindow({ userId, compact = false, onClose }: ChatWin
   const [messages, setMessages] = useState<Message[]>(() => loadMessages(userId));
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState("");
+  // Transient status from backend ("Searching your ideas...", etc.).
+  // Cleared as soon as the first text token arrives — never persisted.
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -156,9 +160,15 @@ export default function ChatWindow({ userId, compact = false, onClose }: ChatWin
 
           try {
             const event = JSON.parse(trimmed.slice(6)) as {
-              type: "thinking" | "text" | "done" | "error";
+              type: "status" | "thinking" | "text" | "done" | "error";
               content: string;
             };
+
+            if (event.type === "status") {
+              // Backend progress update — show while waiting for first LLM token.
+              setStatusMessage(event.content);
+              continue;
+            }
 
             setMessages((prev) =>
               prev.map((m) => {
@@ -169,15 +179,16 @@ export default function ChatWindow({ userId, compact = false, onClose }: ChatWin
                   return { ...m, thinking: (m.thinking ?? "") + event.content };
                 }
                 if (event.type === "text") {
-                  // Accumulate reply tokens into the visible bubble
+                  // First text token — clear the status indicator
+                  setStatusMessage(null);
                   return { ...m, content: m.content + event.content };
                 }
                 if (event.type === "done") {
-                  // Stream finished cleanly
+                  setStatusMessage(null);
                   return { ...m, isStreaming: false };
                 }
                 if (event.type === "error") {
-                  // Backend signalled an error inside the stream
+                  setStatusMessage(null);
                   return {
                     ...m,
                     content: event.content || "An error occurred. Please try again.",
@@ -198,7 +209,8 @@ export default function ChatWindow({ userId, compact = false, onClose }: ChatWin
       // Remove the incomplete assistant bubble on a hard network error
       setMessages((prev) => prev.filter((m) => m.id !== assistantId));
     } finally {
-      // Guarantee isStreaming is cleared even if the `done` event was missed
+      // Guarantee isStreaming + status are cleared even if `done` was missed
+      setStatusMessage(null);
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId ? { ...m, isStreaming: false } : m,
@@ -339,8 +351,8 @@ export default function ChatWindow({ userId, compact = false, onClose }: ChatWin
       >
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} isDark={isDark} />
-        ))}
-
+        ))}        {/* Status indicator — visible between user message and first LLM token */}
+        <StatusIndicator message={statusMessage} />
         {/* Error banner */}
         {error && (
           <div

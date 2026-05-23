@@ -23,11 +23,13 @@ from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 import redis.asyncio as aioredis
 
+from app.core.ai.query_router import route_query
 from app.core.security import get_current_user
 from app.db.mongodb import get_mongo_db
 from app.db.redis import get_redis
 from app.models.user import User
 from app.schemas.chat import ChatRequest
+from app.services.intent_classifier import QueryIntent, classify_intent
 from app.services.rag_service import stream_rag_response
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -90,15 +92,55 @@ async def chat(
     await _check_rate_limit(user_id, redis)
 
     async def _event_generator():
-        """Serialise typed event dicts from rag_service into SSE format."""
+        """
+        Full pipeline as an SSE generator:
+            1. Classify intent   → emit status event
+            2. Route to handler  → fetch context from DB
+            3. Stream LLM        → emit thinking / text / done events
+
+        Every step is wrapped in try/except so any failure yields a typed
+        error event instead of silently dropping the connection (which causes
+        the client to hang indefinitely waiting for data that never arrives).
+        """
+        _status_map = {
+            QueryIntent.CONVERSATIONAL:  "Just a moment...",
+            QueryIntent.LISTING:         "Fetching your ideas...",
+            QueryIntent.SEMANTIC_SEARCH: "Searching your ideas...",
+            QueryIntent.COUNT:           "Counting your ideas...",
+        }
+
+        def _sse(event: dict) -> str:
+            return f"data: {json.dumps(event)}\n\n"
+
+        # ── Step 1: Classify intent ───────────────────────────────────────────
+        yield _sse({"type": "status", "content": "Classifying your request..."})
+        try:
+            intent = await classify_intent(request.message)
+        except Exception as exc:
+            yield _sse({"type": "error", "content": f"Classification failed: {exc}"})
+            return
+
+        # ── Step 2: Route → fetch context ─────────────────────────────────────
+        yield _sse({"type": "status", "content": _status_map[intent]})
+        try:
+            # user_id always comes from the JWT — never from request body.
+            # route_query passes it to every handler which enforces DB-level isolation.
+            context = await route_query(
+                query=request.message,
+                intent=intent,
+                user_id=user_id,
+                db=db,
+            )
+        except Exception as exc:
+            yield _sse({"type": "error", "content": f"Failed to fetch your ideas: {exc}"})
+            return
+
+        # ── Step 3: Stream LLM response ───────────────────────────────────────
         async for event in stream_rag_response(
             user_message=request.message,
-            user_id=user_id,
-            db=db,
+            context=context,
         ):
-            # Each SSE event: "data: <json>\n\n"
-            # json.dumps ensures special characters (newlines, quotes) are safe.
-            yield f"data: {json.dumps(event)}\n\n"
+            yield _sse(event)
 
     return StreamingResponse(
         _event_generator(),

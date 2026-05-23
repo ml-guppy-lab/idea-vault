@@ -74,6 +74,20 @@ class LLMConfig:
         }[self.provider]
 
     @property
+    def classifier_model(self) -> str:
+        """
+        Small/fast model used only for intent classification.
+        Kept separate from the main model so classification stays cheap and
+        low-latency regardless of which heavy model is configured for generation.
+        """
+        return {
+            LLMProvider.ollama: settings.LLM_CLASSIFIER_MODEL_OLLAMA,
+            LLMProvider.openrouter: settings.LLM_CLASSIFIER_MODEL_OPENROUTER,
+            LLMProvider.openai: settings.LLM_CLASSIFIER_MODEL_OLLAMA,      # reuse field as sane default
+            LLMProvider.anthropic: settings.LLM_CLASSIFIER_MODEL_OLLAMA,   # reuse field as sane default
+        }[self.provider]
+
+    @property
     def fallback_model(self) -> str | None:
         """
         Fallback model used when the primary is rate-limited (429).
