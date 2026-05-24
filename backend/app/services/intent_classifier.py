@@ -13,12 +13,15 @@ Security notes:
     falls back to SEMANTIC_SEARCH (never exposes raw model output to callers).
 """
 
+import logging
 import re
 from enum import Enum
 
 from openai import AsyncOpenAI
 
 from app.core.llm_config import LLMProvider, llm_config
+
+logger = logging.getLogger(__name__)
 
 # Hard cap on characters sent to the classifier.
 # Classification only needs the gist of the query — 200 chars is more than enough.
@@ -65,26 +68,28 @@ async def classify_intent(query: str) -> QueryIntent:
         default_headers=llm_config.extra_headers,
     )
 
-    # Ollama's OpenAI-compat layer counts thinking tokens against max_tokens.
-    # For qwen3 and other thinking models, the entire budget is consumed by
-    # <think> blocks, leaving nothing for the actual label.
-    # Fix: omit max_tokens for Ollama (no limit = think freely then respond).
-    # Non-Ollama providers (OpenRouter, OpenAI) don't have thinking mode, so
-    # max_tokens=10 is safe and keeps classification fast and cheap.
-    max_tokens: int | None = None if llm_config.provider == LLMProvider.ollama else 10
-
-    response = await client.chat.completions.create(
-        model=llm_config.classifier_model,
-        messages=[
+    # Disable thinking for Ollama qwen3 models — without this, the model runs a
+    # full chain-of-thought before outputting a single label word, adding 30-120s
+    # of latency to every request. think=False makes classification near-instant.
+    # max_tokens=None for Ollama: safety net in case think=False is not honoured
+    # by the OpenAI-compat layer — lets the model finish thinking then output label.
+    # max_tokens=10 for OpenRouter/others: no thinking mode, label fits in 10 tokens.
+    kwargs: dict = {
+        "model": llm_config.classifier_model,
+        "messages": [
             {"role": "system", "content": _INTENT_SYSTEM_PROMPT},
             {"role": "user", "content": safe_query},
         ],
-        max_tokens=max_tokens,
-        temperature=0,  # deterministic — classification is not creative
-        stream=False,
-    )
+        "max_tokens": None if llm_config.provider == LLMProvider.ollama else 10,
+        "temperature": 0,  # deterministic — classification is not creative
+        "stream": False,
+    }
+    if llm_config.provider == LLMProvider.ollama:
+        kwargs["extra_body"] = {"think": False}
 
+    response = await client.chat.completions.create(**kwargs)
     raw = (response.choices[0].message.content or "")
+    logger.debug("classifier raw output for %r: %r", safe_query, raw)
 
     # Strip any residual <think>...</think> blocks (defense-in-depth).
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)

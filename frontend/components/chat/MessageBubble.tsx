@@ -1,7 +1,5 @@
 "use client";
 
-import { useState } from "react";
-import { ChevronDown, ChevronRight, Brain } from "lucide-react";
 import StreamingText from "./StreamingText";
 
 // ── Types (exported so ChatWindow can import them) ─────────────────────────────
@@ -12,8 +10,6 @@ export interface Message {
   id: string;
   role: MessageRole;
   content: string;
-  /** Reasoning tokens from the model — shown in a collapsible "Thinking" block. */
-  thinking?: string;
   /** True while the SSE stream for this message is still open. */
   isStreaming?: boolean;
 }
@@ -27,8 +23,6 @@ export default function MessageBubble({
   message: Message;
   isDark: boolean;
 }) {
-  const [thinkingOpen, setThinkingOpen] = useState(false);
-
   // ── User bubble ────────────────────────────────────────────────────────────
   if (message.role === "user") {
     return (
@@ -56,61 +50,6 @@ export default function MessageBubble({
   return (
     <div style={{ display: "flex", justifyContent: "flex-start", marginBottom: 10 }}>
       <div style={{ maxWidth: "87%", display: "flex", flexDirection: "column", gap: 6 }}>
-
-        {/* Collapsible "Thinking" block — only shown when model has reasoning tokens */}
-        {message.thinking && (
-          <div
-            style={{
-              borderRadius: 12,
-              overflow: "hidden",
-              background: isDark ? "rgba(180,160,240,0.07)" : "rgba(143,211,244,0.08)",
-              border: isDark
-                ? "1px solid rgba(180,160,240,0.2)"
-                : "1px solid rgba(143,211,244,0.3)",
-            }}
-          >
-            <button
-              onClick={() => setThinkingOpen((o) => !o)}
-              aria-expanded={thinkingOpen}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.4rem",
-                width: "100%",
-                padding: "0.42rem 0.75rem",
-                background: "transparent",
-                border: "none",
-                cursor: "pointer",
-                fontSize: "0.76rem",
-                fontWeight: 600,
-                color: isDark ? "#a0b0c8" : "#5a7d90",
-                textAlign: "left",
-              }}
-            >
-              <Brain size={12} />
-              Thinking
-              {thinkingOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-            </button>
-
-            {thinkingOpen && (
-              <div
-                style={{
-                  padding: "0.45rem 0.75rem 0.55rem",
-                  fontSize: "0.79rem",
-                  lineHeight: 1.55,
-                  color: isDark ? "#8fafc8" : "#5a7d90",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                  borderTop: isDark
-                    ? "1px solid rgba(180,160,240,0.15)"
-                    : "1px solid rgba(143,211,244,0.2)",
-                }}
-              >
-                {message.thinking}
-              </div>
-            )}
-          </div>
-        )}
 
         {/* Reply bubble — rendered even while empty so the cursor appears immediately */}
         {(message.content || message.isStreaming) && (

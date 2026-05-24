@@ -24,6 +24,21 @@ class LLMProvider(str, Enum):
     anthropic = "anthropic"  # ready for future use
 
 
+class ModelTier(str, Enum):
+    """Controls which model size is used for generation.
+
+    FAST     — trivial responses (greetings, listing, counts).
+               Small model: low latency, low cost.
+    STANDARD — semantic reasoning over idea content.
+               Larger model: better comprehension and synthesis.
+
+    The intent classifier ALWAYS uses the classifier_model (never this tier map)
+    because classification is a separate, always-cheap task.
+    """
+    FAST     = "fast"
+    STANDARD = "standard"
+
+
 class LLMConfig:
     """
     Resolves provider-specific connection details from environment settings.
@@ -87,6 +102,19 @@ class LLMConfig:
             LLMProvider.anthropic: settings.LLM_CLASSIFIER_MODEL_OLLAMA,   # reuse field as sane default
         }[self.provider]
 
+    def model_for_tier(self, tier: ModelTier) -> str:
+        """
+        Return the model string for the given tier and active provider.
+
+        Falls back to the configured primary model for providers not in the
+        tier map (openai, anthropic) so they degrade gracefully.
+        """
+        provider_map = _MODEL_TIER_MAP.get(self.provider)
+        if provider_map is None:
+            # Provider not in tier map — use the primary model for everything.
+            return self.model
+        return provider_map[tier]
+
     @property
     def fallback_model(self) -> str | None:
         """
@@ -132,3 +160,37 @@ class LLMConfig:
 # Singleton — import this everywhere instead of constructing LLMConfig() directly.
 # Constructed once at import time; invalid LLM_PROVIDER fails fast at startup.
 llm_config = LLMConfig()
+
+
+# ── Tier → model map ──────────────────────────────────────────────────────────
+#
+# Maps (provider, tier) → model string.
+# FAST:     smallest model sufficient for the task (formatting, simple answers).
+# STANDARD: larger model needed to reason over idea content.
+
+_MODEL_TIER_MAP: dict[LLMProvider, dict[ModelTier, str]] = {
+    LLMProvider.openrouter: {
+        ModelTier.FAST:     "meta-llama/llama-3.2-3b-instruct:free",
+        ModelTier.STANDARD: "mistralai/mistral-7b-instruct:free",
+    },
+    LLMProvider.ollama: {
+        ModelTier.FAST:     "qwen3:4b",   # already pulled; thinking overhead is negligible for simple tasks
+        ModelTier.STANDARD: "qwen3:14b",
+    },
+}
+
+
+def select_tier_for_intent(intent: str) -> ModelTier:
+    """
+    Map a QueryIntent value to a ModelTier for generation.
+
+    Accepts the intent as a plain string (matching QueryIntent.value) so this
+    function has no import dependency on intent_classifier — avoiding a circular
+    import (intent_classifier already imports llm_config).
+
+    FAST     → CONVERSATIONAL, LISTING, COUNT  (no reasoning needed)
+    STANDARD → SEMANTIC_SEARCH                 (must reason over idea content)
+    """
+    if intent in ("CONVERSATIONAL", "LISTING", "COUNT"):
+        return ModelTier.FAST
+    return ModelTier.STANDARD  # SEMANTIC_SEARCH — default for any unknown intent
