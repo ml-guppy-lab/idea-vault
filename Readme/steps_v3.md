@@ -225,6 +225,269 @@ User query
       → handle_semantic_search()  — vector search + fallback
       → handle_count()            — count_documents
   → stream_rag_response()     — intent-aware prompt → LLM stream
-  → SSE events: thinking / text / done / error
+  → SSE events: text / done / error
   → [ChatWindow.tsx] renders tokens + status indicator
+```
+
+---
+
+## Epic 2 — Model Tiering
+
+### What & Why
+
+All queries were previously using one model for generation regardless of complexity. V3 selects model size based on intent — simple intents use a smaller/faster model, semantic search uses a larger one.
+
+### Files Modified
+
+| File | What Changed |
+|---|---|
+| `backend/app/core/llm_config.py` | Added `ModelTier` enum, `_MODEL_TIER_MAP`, `model_for_tier()` method, `select_tier_for_intent()` function |
+| `backend/app/services/rag_service.py` | Derives tier from `context["intent"]`, passes selected model to `_create_stream_with_fallback` |
+| `backend/app/core/config.py` | Updated `LLM_OPENROUTER_MODEL` default to match STANDARD tier model |
+| `backend/.env` | Cleaned up stale model names (`gpt-oss-120b`, `gemma-4-31b`) → replaced with tier-aligned models |
+
+### Files Created
+
+| File | Purpose |
+|---|---|
+| `backend/testFiles/test_model_tiering.py` | Prints resolved model per intent + asserts FAST ≠ STANDARD |
+
+### Tier Map
+
+| Intent | Tier | Ollama model | OpenRouter model |
+|---|---|---|---|
+| `CONVERSATIONAL` | FAST | `qwen3:4b` | `meta-llama/llama-3.2-3b-instruct:free` |
+| `LISTING` | FAST | `qwen3:4b` | `meta-llama/llama-3.2-3b-instruct:free` |
+| `COUNT` | FAST | `qwen3:4b` | `meta-llama/llama-3.2-3b-instruct:free` |
+| `SEMANTIC_SEARCH` | STANDARD | `qwen3:14b` | `mistralai/mistral-7b-instruct:free` |
+
+The intent classifier always uses `classifier_model` (separate property, always fast) — never subject to the tier map.
+
+### How to Test
+
+```bash
+cd backend
+python testFiles/test_model_tiering.py                    # uses .env provider
+python testFiles/test_model_tiering.py --provider openrouter
+```
+
+---
+
+## Additional Fixes & Changes (Post-Epic-1 Testing)
+
+### Fix 1 — Thinking tokens disabled for all providers
+
+**Problem:** qwen3 models (Ollama) run chain-of-thought by default, adding 30-120s latency on every request — including trivial ones like "hi".
+
+**Fix — classifier (`intent_classifier.py`):**
+```python
+if llm_config.provider == LLMProvider.ollama:
+    kwargs["extra_body"] = {"think": False}
+```
+`max_tokens=None` retained for Ollama as a safety net in case `think: False` is not honoured by the OpenAI-compat layer (prevents empty content → SEMANTIC_SEARCH fallback).
+
+**Fix — generation (`rag_service.py`):**  
+Removed `"include_reasoning": True` from OpenRouter extra params.  
+Added `extra_body={"think": False}` for Ollama.  
+Neither provider streams reasoning tokens to the frontend.
+
+**Fix — frontend (`MessageBubble.tsx`, `ChatWindow.tsx`):**  
+Removed the collapsible "Thinking" block UI, `thinking` field from `Message` interface, and `thinking` SSE event handler entirely.
+
+---
+
+### Fix 2 — MongoDB projection error (code 31254)
+
+**Problem:** `_IDEA_PROJECTION` in `handlers.py` mixed inclusion fields (`field: 1`) with one exclusion (`"embedding": 0`). MongoDB rejects mixed projections.
+
+**Fix:** Removed `"embedding": 0`. Embedding is implicitly excluded when an inclusion projection lists only the required fields.
+
+---
+
+### Fix 3 — Frontend SSE timeout (`UND_ERR_BODY_TIMEOUT`)
+
+**Problem:** Next.js uses undici internally for `fetch()`. Undici's body timeout killed the SSE stream mid-response for slow queries (SEMANTIC_SEARCH + qwen3:14b on CPU).
+
+**Fix:** Rewrote `frontend/app/api/chat/route.ts` to use Node.js's native `node:http` module instead of `fetch()`. Native http has no body timeout by default — the stream stays open until the LLM finishes.  
+Also added `export const maxDuration = 300` for Vercel compatibility.
+
+---
+
+### Fix 4 — `ai/` folder location
+
+`backend/app/core/ai/` was moved to `backend/app/ai/` during development. All imports updated:
+
+| File | Old import | New import |
+|---|---|---|
+| `chat.py` | `from backend.app.ai.query_router` | `from app.ai.query_router` |
+| `query_router.py` | `from backend.app.ai.handlers` | `from app.ai.handlers` |
+
+---
+
+### Fix 5 — Debug logging added to classifier
+
+Added `logging.getLogger(__name__)` to `intent_classifier.py`. Classifier logs the raw model output at DEBUG level:
+```
+DEBUG app.services.intent_classifier — classifier raw output for 'hi': 'CONVERSATIONAL'
+```
+Useful for verifying classification without curl — visible in `docker compose logs backend`.
+
+---
+
+## Epic 3 — Compound Query Decomposition
+
+### What & Why
+
+V3 Epic 1 assumed one intent per message. Real users send multi-part queries like:
+- "hi, how many ideas do I have?"  ← CONVERSATIONAL + COUNT
+- "how many ideas do I have? do I have any fitness ideas?" ← COUNT + SEMANTIC_SEARCH
+
+A single classification picks one intent and silently ignores the rest. Epic 3 splits the query, classifies each part independently, routes each to the correct handler, and merges the results before passing a unified context to the LLM.
+
+---
+
+### Files Created
+
+| File | Purpose |
+|---|---|
+| `backend/app/ai/query_decomposer.py` | Splits, classifies, routes, and merges compound queries |
+
+### Files Modified
+
+| File | What Changed |
+|---|---|
+| `backend/app/api/chat.py` | Replaced `classify_intent + route_query` with single `decompose_and_route` call |
+| `backend/app/services/rag_service.py` | `_build_system_prompt` gains `compound_prefix` + `count_fact` injection for compound context |
+
+---
+
+### Step-by-Step Implementation
+
+#### Step 1 — Query splitter (`_split_query`)
+
+Splits on sentence-terminal punctuation (`.!?`) first, then on explicit multi-word connectives:
+
+```
+"and also" | "but also" | "also show" | "also list" | "also find" | "also tell"
+```
+
+Deliberately **not** splitting on bare `"and"` — that would break topical phrases like `"fitness and nutrition ideas"` into two useless fragments.
+
+Sub-strings shorter than 5 characters are dropped (conjunction fragments like `"and"`, `"also"`).
+
+---
+
+#### Step 2 — Simple path (no overhead for single-intent queries)
+
+If `_split_query` returns ≤ 1 part, the function falls through to the original single classify + route path. No extra latency added for normal queries.
+
+---
+
+#### Step 3 — Compound path
+
+For N sub-queries:
+1. `classify_intent(sub)` — called N times sequentially
+2. `route_query(sub, intent, user_id, db)` — called N times sequentially
+3. Results merged:
+   - **Ideas** — deduplicated by `_id` (all already scoped to `user_id` at DB layer)
+   - **Count** — first COUNT result wins (multiple count sub-queries in one message is rare)
+   - **Dominant intent** — highest priority intent drives the system prompt selection
+
+Intent priority (higher = richer DB context = better LLM grounding):
+```
+SEMANTIC_SEARCH: 4  →  LISTING: 3  →  COUNT: 2  →  CONVERSATIONAL: 1
+```
+
+---
+
+#### Step 4 — Context dict returned
+
+```python
+{
+    "ideas":       list[dict],  # deduplicated, all scoped to user_id
+    "intent":      str,         # dominant intent value e.g. "SEMANTIC_SEARCH"
+    "raw_query":   str,         # original full query (not sub-queries)
+    "count":       int | None,  # from COUNT handler if any sub-query was COUNT
+    "is_compound": bool,        # True only for multi-intent queries
+}
+```
+
+---
+
+#### Step 5 — Prompt changes in `rag_service.py`
+
+Two additions to `_build_system_prompt`:
+
+**`compound_prefix`** — prepended to every intent branch when `is_compound=True`:
+```
+"The user's message contains multiple questions or requests.
+Address ALL of them in your response — do not skip any part."
+```
+
+**`count_fact`** — injected into LISTING/SEMANTIC_SEARCH prompts when the compound context includes a COUNT result. Without this, the LLM would count the few retrieved ideas shown in the prompt instead of the real vault total:
+```
+"FACT: The user has 4 ideas saved in total in their vault.
+Use this number if they asked how many ideas they have."
+```
+
+COUNT prompt (any compound or standalone) already says: *"Tell the user this in a warm, complete sentence — never output just the number alone."*
+
+---
+
+#### Step 6 — Wire into `chat.py`
+
+Replaced:
+```python
+intent = await classify_intent(query)
+context = await route_query(query, intent, user_id, db)
+```
+With:
+```python
+from app.ai.query_decomposer import decompose_and_route
+context = await decompose_and_route(query=request.message, user_id=user_id, db=db)
+```
+
+The `_status_map` keys remain plain strings (`"CONVERSATIONAL"`, etc.) — `context["intent"]` is always the `.value` of the `QueryIntent` enum.
+
+---
+
+### Known Behaviour
+
+| Scenario | Behaviour |
+|---|---|
+| Single-intent query | No overhead — same path as before Epic 3 |
+| Compound with CONVERSATIONAL + COUNT | Dominant = COUNT; `compound_prefix` tells LLM to also greet |
+| Compound with COUNT + SEMANTIC_SEARCH | Dominant = SEMANTIC_SEARCH; `count_fact` injects real total into prompt |
+| Classifier typo (e.g. `SEMIC_SEARCH`) | Regex match fails → fallback `SEMANTIC_SEARCH`; routing still correct |
+| Laptop closed mid-request | Ollama pauses → in-flight request fails → frontend shows network error; not a code bug |
+
+---
+
+### Latency Impact
+
+Each sub-query adds one `classify_intent` call + one DB query. For Ollama on Mac CPU, each classifier call takes ~12–15 s, so a 2-part compound query takes ~25 s in classification alone before generation starts. This is expected for local CPU inference.
+
+For interactive use, switch STANDARD tier to `qwen3:4b` locally (set `LLM_OLLAMA_MODEL=qwen3:4b` in `.env`) or use OpenRouter where cloud GPU inference is fast.
+
+---
+
+### Updated Pipeline Summary (V3 Epic 3)
+
+```
+User query
+  → [chat.py] rate limit check
+  → yield status: "Analysing your request..."
+  → decompose_and_route()
+      → _split_query()              — sentence/connective split
+      → [simple path]  classify + route once
+      → [compound path] for each sub-query:
+            classify_intent()       — small/fast model
+            route_query()           — correct handler per intent
+        merge ideas (deduplicate by _id)
+        pick dominant intent by priority
+  → yield status: intent-specific message
+  → stream_rag_response()
+      → _build_system_prompt()      — compound_prefix + count_fact if needed
+      → LLM stream (tier-selected model)
+  → SSE events: text / done / error
 ```

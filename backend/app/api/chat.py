@@ -23,13 +23,12 @@ from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 import redis.asyncio as aioredis
 
-from app.ai.query_router import route_query
+from app.ai.query_decomposer import decompose_and_route
 from app.core.security import get_current_user
 from app.db.mongodb import get_mongo_db
 from app.db.redis import get_redis
 from app.models.user import User
 from app.schemas.chat import ChatRequest
-from app.services.intent_classifier import QueryIntent, classify_intent
 from app.services.rag_service import stream_rag_response
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -102,38 +101,37 @@ async def chat(
         error event instead of silently dropping the connection (which causes
         the client to hang indefinitely waiting for data that never arrives).
         """
+        # String keys match the .value returned by handlers (e.g. "LISTING").
+        # Compound queries use the dominant intent to pick the status label.
         _status_map = {
-            QueryIntent.CONVERSATIONAL:  "Just a moment...",
-            QueryIntent.LISTING:         "Fetching your ideas...",
-            QueryIntent.SEMANTIC_SEARCH: "Searching your ideas...",
-            QueryIntent.COUNT:           "Counting your ideas...",
+            "CONVERSATIONAL":  "Just a moment...",
+            "LISTING":         "Fetching your ideas...",
+            "SEMANTIC_SEARCH": "Searching your ideas...",
+            "COUNT":           "Counting your ideas...",
         }
 
         def _sse(event: dict) -> str:
             return f"data: {json.dumps(event)}\n\n"
 
-        # ── Step 1: Classify intent ───────────────────────────────────────────
-        yield _sse({"type": "status", "content": "Classifying your request..."})
+        # ── Step 1 + 2: Decompose → classify each part → route ─────────────────
+        # For simple queries this is identical to the old classify + route flow.
+        # For compound queries (e.g. "hi, do I have any fitness ideas?") each
+        # sub-query is classified and routed independently, then results merged.
+        yield _sse({"type": "status", "content": "Analysing your request..."})
         try:
-            intent = await classify_intent(request.message)
-        except Exception as exc:
-            yield _sse({"type": "error", "content": f"Classification failed: {exc}"})
-            return
-
-        # ── Step 2: Route → fetch context ─────────────────────────────────────
-        yield _sse({"type": "status", "content": _status_map[intent]})
-        try:
-            # user_id always comes from the JWT — never from request body.
-            # route_query passes it to every handler which enforces DB-level isolation.
-            context = await route_query(
+            # user_id always comes from the verified JWT — never from the request body.
+            context = await decompose_and_route(
                 query=request.message,
-                intent=intent,
                 user_id=user_id,
                 db=db,
             )
         except Exception as exc:
-            yield _sse({"type": "error", "content": f"Failed to fetch your ideas: {exc}"})
+            yield _sse({"type": "error", "content": f"Failed to process your request: {exc}"})
             return
+
+        # Show intent-specific status while the LLM generates the response
+        dominant_intent = context.get("intent", "SEMANTIC_SEARCH")
+        yield _sse({"type": "status", "content": _status_map.get(dominant_intent, "Processing...")})
 
         # ── Step 3: Stream LLM response ───────────────────────────────────────
         async for event in stream_rag_response(
