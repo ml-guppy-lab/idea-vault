@@ -23,7 +23,7 @@ from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 import redis.asyncio as aioredis
 
-from app.core.ai.query_router import route_query
+from app.ai.query_router import route_query
 from app.core.security import get_current_user
 from app.db.mongodb import get_mongo_db
 from app.db.redis import get_redis
