@@ -114,7 +114,6 @@ export default function ChatWindow({ userId, compact = false, onClose }: ChatWin
       id: assistantId,
       role: "assistant",
       content: "",
-      thinking: "",
       isStreaming: true,
     };
 
@@ -160,7 +159,7 @@ export default function ChatWindow({ userId, compact = false, onClose }: ChatWin
 
           try {
             const event = JSON.parse(trimmed.slice(6)) as {
-              type: "status" | "thinking" | "text" | "done" | "error";
+              type: "status" | "text" | "done" | "error";
               content: string;
             };
 
@@ -174,10 +173,6 @@ export default function ChatWindow({ userId, compact = false, onClose }: ChatWin
               prev.map((m) => {
                 if (m.id !== assistantId) return m;
 
-                if (event.type === "thinking") {
-                  // Accumulate reasoning tokens into the collapsible Thinking block
-                  return { ...m, thinking: (m.thinking ?? "") + event.content };
-                }
                 if (event.type === "text") {
                   // First text token — clear the status indicator
                   setStatusMessage(null);

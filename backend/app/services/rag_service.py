@@ -26,7 +26,7 @@ from typing import AsyncGenerator
 
 from openai import AsyncOpenAI, RateLimitError
 
-from app.core.llm_config import LLMProvider, llm_config
+from app.core.llm_config import LLMProvider, ModelTier, llm_config, select_tier_for_intent
 
 # Maximum characters accepted from user input.
 # Prevents prompt injection attacks where a malicious user embeds instructions
@@ -132,20 +132,28 @@ async def stream_rag_response(
         {"role": "user", "content": user_message[:_MAX_USER_MSG_CHARS]},
     ]
 
-    # ── Step 2: Call LLM and stream tokens ────────────────────────────────────
+    # ── Step 2: Select model tier based on intent ─────────────────────────────
+    # FAST tier (llama3.2:3b / llama-3.2-3b-instruct) — greetings, listing, counts.
+    # STANDARD tier (qwen3:14b / mistral-7b) — semantic search needs real reasoning.
+    tier = select_tier_for_intent(context["intent"])
+    model = llm_config.model_for_tier(tier)
+
+    # ── Step 3: Call LLM and stream tokens ────────────────────────────────────
     client = AsyncOpenAI(
         base_url=llm_config.base_url,
         api_key=llm_config.api_key,
         default_headers=llm_config.extra_headers,
     )
 
-    # OpenRouter requires an explicit opt-in to receive reasoning tokens.
+    # Thinking/reasoning tokens disabled for all providers — adds latency without
+    # user-visible benefit. Ollama: think=false suppresses chain-of-thought entirely.
+    # OpenRouter: omitting include_reasoning means no reasoning_content is sent.
     extra_params: dict = {}
-    if llm_config.provider == LLMProvider.openrouter:
-        extra_params["extra_body"] = {"include_reasoning": True}
+    if llm_config.provider == LLMProvider.ollama:
+        extra_params["extra_body"] = {"think": False}
 
     try:
-        stream = await _create_stream_with_fallback(client, messages, extra_params)
+        stream = await _create_stream_with_fallback(client, messages, extra_params, model)
     except RateLimitError:
         yield {"type": "error", "content": "LLM is temporarily unavailable. Please try again in a moment."}
         return
@@ -153,18 +161,11 @@ async def stream_rag_response(
         yield {"type": "error", "content": f"Could not reach the AI model: {exc}"}
         return
 
-    # Yield tokens as they arrive, typed by field
+    # Yield reply tokens as they arrive
     async for chunk in stream:
         if not chunk.choices:
             continue
         delta = chunk.choices[0].delta
-
-        # Thinking tokens — provider-specific field
-        thinking = getattr(delta, "reasoning", None) or getattr(delta, "reasoning_content", None)
-        if thinking:
-            yield {"type": "thinking", "content": thinking}
-
-        # Reply tokens — same field for all providers
         if delta.content:
             yield {"type": "text", "content": delta.content}
 
@@ -175,9 +176,10 @@ async def _create_stream_with_fallback(
     client: AsyncOpenAI,
     messages: list[dict],
     extra_params: dict,
+    model: str,
 ):
     """
-    Attempt to create a streaming completion with the primary model.
+    Attempt to create a streaming completion with the tier-selected model.
     On 429, retry with exponential backoff then switch to the fallback model.
 
     Separated from stream_rag_response so the generator itself stays clean —
@@ -188,7 +190,7 @@ async def _create_stream_with_fallback(
     for attempt in range(1, 4):  # 3 attempts: 2s, 4s, 8s
         try:
             return await client.chat.completions.create(
-                model=llm_config.model,
+                model=model,
                 messages=messages,
                 stream=True,
                 max_tokens=2000,  # enough headroom for thinking + reply
@@ -201,7 +203,7 @@ async def _create_stream_with_fallback(
                 import asyncio  # noqa: PLC0415
                 await asyncio.sleep(2 ** attempt)
 
-    # All retries exhausted — try fallback model
+    # All retries exhausted — try fallback model (OpenRouter only)
     fallback = llm_config.fallback_model
     if fallback:
         return await client.chat.completions.create(

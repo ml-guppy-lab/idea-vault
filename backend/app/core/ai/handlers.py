@@ -39,7 +39,9 @@ _IDEA_PROJECTION = {
     "imageUrl": 1,
     "createdAt": 1,
     "updatedAt": 1,
-    "embedding": 0,   # explicit exclusion — belt-and-suspenders
+    # embedding is implicitly excluded — inclusion projection only returns
+    # listed fields. Mixing "embedding": 0 with inclusion fields is illegal
+    # in MongoDB (error 31254).
 }
 
 _LISTING_LIMIT = 10
