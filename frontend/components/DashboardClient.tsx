@@ -6,6 +6,7 @@ import { Search, Plus, Sparkles, X } from "lucide-react";
 import { useTheme } from "next-themes";
 import IdeaCard from "@/components/IdeaCard";
 import ChatWindow from "@/components/chat/ChatWindow";
+import type { Task } from "@/types/task";
 
 type Status = "Raw" | "Exploring" | "Validated" | "Building" | "Shipped" | "Abandoned";
 type Priority = "Low" | "Medium" | "High";
@@ -18,6 +19,7 @@ interface Idea {
   status: Status;
   priority: Priority;
   createdAt: string;
+  tasks?: Task[];
 }
 
 const FILTERS = ["All", "Raw", "Exploring", "Validated", "Building", "Shipped", "Abandoned"] as const;
