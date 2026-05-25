@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import type { Task } from "@/types/task";
 
 interface IdeaCardProps {
   id: string;
@@ -13,6 +14,7 @@ interface IdeaCardProps {
   image?: string;
   createdAt: string;
   gradientIndex?: number;
+  tasks?: Task[];
 }
 
 const GRADIENTS_LIGHT = [
@@ -51,7 +53,7 @@ function formatDate(iso: string) {
 }
 
 export default function IdeaCard({
-  id, title, description, tags, status, priority, image, createdAt, gradientIndex = 0,
+  id, title, description, tags, status, priority, image, createdAt, gradientIndex = 0, tasks,
 }: IdeaCardProps) {
   const [hovered, setHovered] = useState(false);
   const idx = gradientIndex % 5;
@@ -146,7 +148,14 @@ export default function IdeaCard({
               }} />
               {priority}
             </div>
-            <span>{formatDate(createdAt)}</span>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "0.2rem" }}>
+              {tasks && tasks.length > 0 && (
+                <span style={{ fontSize: "0.68rem", color: "#6b8fa0" }}>
+                  ✓ {tasks.filter(t => t.status === "done").length}/{tasks.length} tasks
+                </span>
+              )}
+              <span>{formatDate(createdAt)}</span>
+            </div>
           </div>
         </div>
       </div>

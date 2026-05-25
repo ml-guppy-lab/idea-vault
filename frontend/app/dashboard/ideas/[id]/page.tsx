@@ -7,12 +7,14 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
 import { ArrowLeft, Edit2, Trash2, Save, Loader2, Calendar, Flag, Clock, CloudUpload } from "lucide-react";
+import type { Task } from "@/types/task";
+import TaskList from "@/components/tasks/TaskList";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
 // ── Types & schema ────────────────────────────────────────────────────────────
 
-interface Idea { id: string; title: string; summary: string; description?: string; tags: string[]; status: string; priority: string; createdAt: string; updatedAt: string; imageUrl?: string; }
+interface Idea { id: string; title: string; summary: string; description?: string; tags: string[]; status: string; priority: string; createdAt: string; updatedAt: string; imageUrl?: string; tasks: Task[]; }
 
 const SUMMARY_MAX_WORDS = 190;
 function countWords(text: string): number {
@@ -77,8 +79,8 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
   useEffect(() => {
     fetch(`/api/ideas/${id}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then((d: { _id: string; title: string; summary: string; description?: string; tags: string[]; status: string; priority: string; createdAt: string; updatedAt: string; image?: string }) => {
-        const idea: Idea = { ...d, id: d._id, status: cap(d.status), priority: cap(d.priority) };
+      .then((d: { _id: string; title: string; summary: string; description?: string; tags: string[]; status: string; priority: string; createdAt: string; updatedAt: string; image?: string; tasks?: Task[] }) => {
+        const idea: Idea = { ...d, id: d._id, status: cap(d.status), priority: cap(d.priority), tasks: d.tasks ?? [] };
         setIdea(idea);
         reset({ title: idea.title, summary: idea.summary, description: idea.description ?? "", tags: idea.tags, status: idea.status as FormData["status"], priority: idea.priority as FormData["priority"] });
         if (idea.imageUrl) setPreview(idea.imageUrl); // show existing Cloudinary image
@@ -203,6 +205,11 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
 
             {/* Description */}
             {idea.description && <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.7, fontSize: "0.95rem", marginTop: "1rem" }} className="[color:#3d6678] dark:[color:#b4c8e0]">{idea.description}</p>}
+
+            {/* Tasks */}
+            <div style={{ borderTop: "1px solid rgba(170,200,215,0.4)", marginTop: "1.8rem", paddingTop: "1.5rem" }}>
+              <TaskList ideaId={idea.id} initialTasks={idea.tasks} />
+            </div>
 
             {/* Action buttons */}
             <div style={{ display: "flex", gap: "0.8rem", marginTop: "2rem", flexWrap: "wrap" }}>
