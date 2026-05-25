@@ -170,8 +170,8 @@ llm_config = LLMConfig()
 
 _MODEL_TIER_MAP: dict[LLMProvider, dict[ModelTier, str]] = {
     LLMProvider.openrouter: {
-        ModelTier.FAST:     "meta-llama/llama-3.2-3b-instruct:free",
-        ModelTier.STANDARD: "mistralai/mistral-7b-instruct:free",
+        ModelTier.FAST:     "openai/gpt-oss-20b:free",
+        ModelTier.STANDARD: "google/gemma-4-31b-it:free",
     },
     LLMProvider.ollama: {
         ModelTier.FAST:     "qwen3:4b",   # already pulled; thinking overhead is negligible for simple tasks

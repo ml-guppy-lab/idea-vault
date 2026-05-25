@@ -23,10 +23,13 @@ Usage:
 """
 
 from typing import AsyncGenerator
+import logging
 
 from openai import AsyncOpenAI, RateLimitError
 
 from app.core.llm_config import LLMProvider, ModelTier, llm_config, select_tier_for_intent
+
+logger = logging.getLogger(__name__)
 
 # Maximum characters accepted from user input.
 # Prevents prompt injection attacks where a malicious user embeds instructions
@@ -159,9 +162,10 @@ async def stream_rag_response(
 
     # ── Step 2: Select model tier based on intent ─────────────────────────────
     # FAST tier (llama3.2:3b / llama-3.2-3b-instruct) — greetings, listing, counts.
-    # STANDARD tier (qwen3:14b / mistral-7b) — semantic search needs real reasoning.
+    # STANDARD tier (qwen3:14b / gemma-4-31b) — semantic search needs real reasoning.
     tier = select_tier_for_intent(context["intent"])
     model = llm_config.model_for_tier(tier)
+    logger.info("[rag] intent=%s tier=%s model=%s", context["intent"], tier.value, model)
 
     # ── Step 3: Call LLM and stream tokens ────────────────────────────────────
     client = AsyncOpenAI(
