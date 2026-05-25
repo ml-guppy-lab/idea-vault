@@ -6,7 +6,7 @@ supply a query, its classified intent, the authenticated user_id, and the DB
 handle. The router does the rest.
 
 Usage:
-    from app.core.ai.query_router import route_query
+    from app.ai.query_router import route_query
     from app.services.intent_classifier import classify_intent
 
     intent = await classify_intent(user_message)
@@ -16,7 +16,7 @@ Usage:
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.core.ai.handlers import (
+from app.ai.handlers import (
     handle_conversational,
     handle_count,
     handle_listing,
