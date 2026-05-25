@@ -491,3 +491,283 @@ User query
       → LLM stream (tier-selected model)
   → SSE events: text / done / error
 ```
+
+---
+
+## Epic 2 — Model Tiering (Wiring Verification)
+
+### Status: Confirmed Complete
+
+All tier wiring was already in place from the initial Epic 2 implementation. Verified by code review:
+
+- `select_tier_for_intent(context["intent"])` → `ModelTier.FAST | STANDARD`
+- `llm_config.model_for_tier(tier)` → provider-specific model string
+- `_create_stream_with_fallback(client, messages, extra_params, model)` — `model` arg passed through to `client.chat.completions.create(model=model, ...)`
+
+### Files Modified (Post-Verification)
+
+| File | What Changed |
+|---|---|
+| `backend/app/services/rag_service.py` | Added `import logging` + `logger.info("[rag] intent=%s tier=%s model=%s", ...)` after model selection |
+
+### Log Output (Verification)
+
+After `docker compose restart backend`, each chat request logs:
+
+```
+INFO  app.services.rag_service — [rag] intent=CONVERSATIONAL tier=fast model=meta-llama/llama-3.2-3b-instruct:free
+INFO  app.services.rag_service — [rag] intent=SEMANTIC_SEARCH tier=standard model=mistralai/mistral-7b-instruct:free
+```
+
+Visible via `docker compose logs backend -f`.
+
+---
+
+## Auth — Centralized Server-Side API Client + Middleware Fix
+
+### What & Why
+
+Route handlers were duplicating cookie-read → forward → set-new-token logic. More critically, `middleware.ts` was sending the refresh token in the JSON body but FastAPI reads it from `request.cookies` — causing every user to be logged out 15 minutes after login on any page navigation.
+
+### Files Created
+
+| File | Purpose |
+|---|---|
+| `frontend/lib/server-api.ts` | Centralized FastAPI fetch wrapper for Next.js server-side route handlers |
+
+### Files Modified
+
+| File | What Changed |
+|---|---|
+| `frontend/middleware.ts` | `tryRefresh` fixed: sends `Cookie: refresh_token=...` header instead of JSON body |
+| `frontend/app/api/ideas/create/route.ts` | Updated to use `apiFetch` + `applyNewToken` |
+| `frontend/app/api/ideas/[id]/route.ts` | Updated to use `apiFetch` + `applyNewToken` |
+| `frontend/app/api/ideas/image/route.ts` | Updated to use `apiFetch` + `applyNewToken` |
+| `frontend/app/api/profile/route.ts` | Updated to use `apiFetch` + `applyNewToken` |
+| `frontend/app/api/profile/avatar/route.ts` | Updated to use `apiFetch` + `applyNewToken` |
+| `frontend/app/api/profile/change-password/route.ts` | Updated to use `apiFetch` + `applyNewToken` |
+
+### `server-api.ts` Design
+
+```typescript
+// Process-level lock prevents concurrent route handlers from each triggering
+// a separate /auth/refresh call when an access token expires.
+let refreshPromise: Promise<string | null> | null = null;
+
+export async function apiFetch(
+  path: string,
+  init: RequestInit = {}
+): Promise<{ response: Response; newAccessToken: string | null }>
+// On 401 → calls FastAPI /auth/refresh with Cookie header (not body)
+// Retries original request with new token
+// Returns { response, newAccessToken } — caller applies token to its own response
+
+export function applyNewToken(res: NextResponse, newAccessToken: string | null): void
+// Sets access_token httpOnly cookie; no-op when null
+```
+
+### Root Cause of Middleware Logout Bug
+
+`tryRefresh` was calling:
+```typescript
+body: JSON.stringify({ refresh_token: refreshToken })  // ❌ wrong
+```
+FastAPI's `/auth/refresh` endpoint reads `request.cookies.get("refresh_token")` — not the JSON body. So every refresh attempt returned 401 → user logged out 15 min after login.
+
+Fixed to:
+```typescript
+headers: { Cookie: `refresh_token=${refreshToken}` }  // ✅ correct
+```
+
+### Route Handler Pattern
+
+```typescript
+// Every protected route handler now follows this pattern:
+const { response, newAccessToken } = await apiFetch("/api/some-endpoint", { method, headers, body });
+const data = await response.json();
+const res = NextResponse.json(data, { status: response.status });
+applyNewToken(res, newAccessToken);
+return res;
+```
+
+### Fix — CORS PATCH Missing
+
+`backend/app/main.py` `allow_methods` did not include `"PATCH"`. Added — PATCH requests would otherwise fail CORS preflight silently.
+
+---
+
+## Epic 4 — Task Management
+
+### What & Why
+
+Ideas needed a lightweight action tracker so users can attach to-do items directly to each idea without leaving the vault. Tasks are embedded sub-documents inside each idea's MongoDB document — no separate collection, no joins, no extra indexes.
+
+### Architecture Decision
+
+Tasks are stored as an embedded array (`tasks: list[TaskInDB]`) inside the idea document. This keeps reads simple (one `find_one` returns the idea + all its tasks), avoids joins, and is appropriate for the expected scale (tens of tasks per idea, not thousands).
+
+---
+
+### Files Created
+
+| File | Purpose |
+|---|---|
+| `backend/app/schemas/task.py` | Pydantic schemas — `TaskStatus` enum, `TaskCreate`, `TaskUpdate`, `TaskInDB`, `TaskResponse` |
+| `backend/app/api/tasks.py` | 4 CRUD endpoints: POST, GET, PATCH, DELETE |
+| `frontend/app/api/ideas/[id]/tasks/route.ts` | BFF proxy — GET + POST |
+| `frontend/app/api/ideas/[id]/tasks/[taskId]/route.ts` | BFF proxy — PATCH + DELETE |
+| `frontend/types/task.ts` | TypeScript types: `Task`, `TaskStatus`, `CreateTaskPayload`, `UpdateTaskPayload` |
+| `frontend/components/tasks/TaskItem.tsx` | Single task row — checkbox toggle, status badge, due date, notes, hover-delete |
+| `frontend/components/tasks/AddTaskForm.tsx` | Inline form — title (required), due date (optional), notes (optional) |
+| `frontend/components/tasks/TaskList.tsx` | Manages task state with optimistic UI + snapshot rollback on failure |
+
+### Files Modified
+
+| File | What Changed |
+|---|---|
+| `backend/app/schemas/idea.py` | `IdeaInDB` and `IdeaResponse` gain `tasks: list[TaskInDB | TaskResponse] = []` |
+| `backend/app/main.py` | `include_router(tasks.router, prefix="/api")` added |
+| `frontend/components/IdeaCard.tsx` | Optional `tasks?: Task[]` prop; footer shows `✓ X/Y tasks` progress count |
+| `frontend/components/DashboardClient.tsx` | `Idea` interface gains `tasks?: Task[]`; spread `{...idea}` passes it to IdeaCard |
+| `frontend/app/dashboard/ideas/[id]/page.tsx` | `Idea` interface gains `tasks: Task[]`; fetch maps `d.tasks ?? []`; `TaskList` rendered below description |
+
+---
+
+### Backend Schema (`task.py`)
+
+```python
+class TaskStatus(str, Enum):
+    TODO        = "todo"
+    IN_PROGRESS = "in_progress"
+    DONE        = "done"
+
+class TaskCreate(BaseModel):
+    title:   str            = Field(..., min_length=1, max_length=200)
+    status:  TaskStatus     = TaskStatus.TODO
+    dueDate: Optional[datetime] = None
+    notes:   Optional[str]  = Field(None, max_length=600)  # ~100 words
+
+class TaskUpdate(BaseModel):           # all fields optional for PATCH
+    title:   Optional[str]      = Field(None, min_length=1, max_length=200)
+    status:  Optional[TaskStatus] = None
+    dueDate: Optional[datetime] = None
+    notes:   Optional[str]      = Field(None, max_length=600)
+
+class TaskInDB(BaseModel):             # stored in MongoDB
+    id:        str      = Field(default_factory=lambda: str(uuid.uuid4()))
+    title:     str
+    status:    TaskStatus = TaskStatus.TODO
+    dueDate:   Optional[datetime] = None
+    notes:     Optional[str] = None
+    createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updatedAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+```
+
+Field names are camelCase (`dueDate`, `createdAt`, `updatedAt`) to match project convention and avoid a Pydantic alias layer.
+
+---
+
+### Backend API (`tasks.py`)
+
+| Method | Path | Action |
+|---|---|---|
+| `POST` | `/api/ideas/{idea_id}/tasks` | Append new task via `$push` |
+| `GET` | `/api/ideas/{idea_id}/tasks` | Return `idea["tasks"]` array |
+| `PATCH` | `/api/ideas/{idea_id}/tasks/{task_id}` | Update task fields via positional `$set tasks.$.field` |
+| `DELETE` | `/api/ideas/{idea_id}/tasks/{task_id}` | Remove task via `$pull` |
+
+Key design decisions:
+- `_get_idea_for_user(idea_id, user_id, db)` raises **403** (not 404) on ownership mismatch — prevents leaking whether an idea exists to other users
+- Rate limit: 60 task creates/hr per user (`task_rl:{user_id}` Redis key)
+- PATCH refetches the document after update and returns the persisted state — avoids optimistic state drift between client and DB
+- DELETE: `modified_count == 0` after `$pull` → 404 (task never existed or already deleted)
+
+---
+
+### Frontend TypeScript Types (`types/task.ts`)
+
+```typescript
+export type TaskStatus = "todo" | "in_progress" | "done";
+
+export interface Task {
+  id:        string;
+  title:     string;
+  status:    TaskStatus;
+  dueDate:   string | null;  // ISO 8601 — convert to Date only at display time
+  notes:     string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+```
+
+camelCase throughout — matches what FastAPI serialises.
+
+---
+
+### Frontend Components
+
+#### `TaskList.tsx`
+- Props: `{ ideaId: string; initialTasks: Task[] }`
+- State: `tasks`, `showForm`, `error`
+- Optimistic updates: status change and delete capture a `snapshot` before mutating state; rollback to snapshot on API failure
+- Progress bar: `width: (done / total) * 100%` with CSS transition
+- CRUD calls go to Next.js BFF routes (`/api/ideas/${ideaId}/tasks/...`), not directly to FastAPI
+
+#### `TaskItem.tsx`
+- Checkbox cycles: `todo | in_progress → done → todo`
+- Status badge with intent-matched colours (soft green = done, yellow = in progress, grey = todo)
+- Delete button hidden until row is hovered (Tailwind `group` + `group-hover:opacity-100`)
+- `busy` flag prevents double-clicks during in-flight requests
+
+#### `AddTaskForm.tsx`
+- `autoFocus` on title so user can type immediately
+- Date input (browser native) for optional due date — serialised to ISO 8601 before POST
+- Notes textarea — `maxLength=600` client-side guard matches backend `max_length=600`
+- Submit button disabled + spinner while request is in-flight
+
+---
+
+### IdeaCard Progress Indicator
+
+When `tasks` are present, the card footer shows:
+
+```
+✓ 2/5 tasks   |   May 25, 2026
+```
+
+No tasks → footer unchanged (backward compatible). The `tasks` prop is optional so existing `IdeaCard` call sites without tasks continue to work without modification.
+
+---
+
+### How to Test
+
+#### Backend (curl)
+```bash
+# Create a task — replace {idea_id} and {token}
+curl -X POST http://localhost:8000/api/ideas/{idea_id}/tasks \
+  -H "Authorization: Bearer {token}" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Write landing page", "status": "todo"}'
+
+# List tasks
+curl http://localhost:8000/api/ideas/{idea_id}/tasks \
+  -H "Authorization: Bearer {token}"
+
+# Update status
+curl -X PATCH http://localhost:8000/api/ideas/{idea_id}/tasks/{task_id} \
+  -H "Authorization: Bearer {token}" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "done"}'
+
+# Delete
+curl -X DELETE http://localhost:8000/api/ideas/{idea_id}/tasks/{task_id} \
+  -H "Authorization: Bearer {token}"
+```
+
+#### UI
+1. Open any idea detail page (`/dashboard/ideas/{id}`)
+2. Scroll below the description — task list section appears with "Add task" button
+3. Click "Add task" → inline form appears with autofocus on title
+4. Add title (required), optional due date, optional notes → submit
+5. Task appears; click checkbox to cycle status; hover row to reveal delete button
+6. Return to dashboard — card footer shows `✓ X/Y tasks` count

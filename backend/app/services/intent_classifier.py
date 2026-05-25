@@ -17,7 +17,7 @@ import logging
 import re
 from enum import Enum
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, RateLimitError
 
 from app.core.llm_config import LLMProvider, llm_config
 
@@ -87,7 +87,15 @@ async def classify_intent(query: str) -> QueryIntent:
     if llm_config.provider == LLMProvider.ollama:
         kwargs["extra_body"] = {"think": False}
 
-    response = await client.chat.completions.create(**kwargs)
+    try:
+        response = await client.chat.completions.create(**kwargs)
+    except RateLimitError:
+        # Classifier model is rate-limited at the provider level.
+        # Default to SEMANTIC_SEARCH — safest fallback because it triggers
+        # retrieval so the user still gets a relevant answer.
+        logger.warning("classifier rate-limited; defaulting to SEMANTIC_SEARCH")
+        return QueryIntent.SEMANTIC_SEARCH
+
     raw = (response.choices[0].message.content or "")
     logger.debug("classifier raw output for %r: %r", safe_query, raw)
 

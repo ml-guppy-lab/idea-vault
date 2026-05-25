@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     LLM_OPENROUTER_FALLBACK_MODEL: str = "openai/gpt-oss-120b:free"
     # Fast/small models used exclusively for intent classification (cheap, low-latency).
     LLM_CLASSIFIER_MODEL_OLLAMA: str = "qwen3:4b"
-    LLM_CLASSIFIER_MODEL_OPENROUTER: str = "meta-llama/llama-3.2-3b-instruct:free"
+    LLM_CLASSIFIER_MODEL_OPENROUTER: str = "openai/gpt-oss-20b:free"
     LLM_OPENAI_MODEL: str = "gpt-4o-mini"
     LLM_ANTHROPIC_MODEL: str = "claude-3-5-haiku-20241022"
     OPENROUTER_API_KEY: str = ""
