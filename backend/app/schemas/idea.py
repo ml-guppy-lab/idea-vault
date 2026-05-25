@@ -3,6 +3,8 @@ from typing import Optional
 from enum import Enum
 from datetime import datetime, timezone
 
+from app.schemas.task import TaskInDB, TaskResponse
+
 
 # --- Enums ---
 
@@ -91,6 +93,8 @@ class IdeaResponse(BaseModel):
     status: IdeaStatus
     priority: IdeaPriority
     imageUrl: Optional[str] = None  # Cloudinary HTTPS URL; absent when no image uploaded
+    # Tasks embedded in this idea document — empty list for ideas with no tasks yet
+    tasks: list[TaskResponse] = []
     createdAt: datetime
     updatedAt: datetime
 
@@ -109,6 +113,8 @@ class IdeaInDB(BaseModel):
     status: IdeaStatus = IdeaStatus.raw
     priority: IdeaPriority = IdeaPriority.low
     imageUrl: Optional[str] = None
+    # Tasks are embedded — new ideas start with an empty list
+    tasks: list[TaskInDB] = []
     createdAt: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )

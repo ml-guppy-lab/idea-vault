@@ -21,6 +21,9 @@ services:
       LLM_OLLAMA_BASE_URL: http://host.docker.internal:11434/v1
     volumes:
       - ./backend:/app          # live-reload in development
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     depends_on:
       postgres:
         condition: service_healthy
