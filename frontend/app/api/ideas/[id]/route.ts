@@ -1,48 +1,51 @@
-import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
-
-const API = () =>
-  process.env.INTERNAL_API_URL ||
-  process.env.NEXT_PUBLIC_API_URL ||
-  "http://localhost:8000/api";
-
-async function getToken() {
-  const store = await cookies();
-  return store.get("access_token")?.value ?? "";
-}
+import { apiFetch, applyNewToken } from "@/lib/server-api";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const token = await getToken();
-  const res = await fetch(`${API()}/ideas/get/${id}`, {
-    headers: { Authorization: `Bearer ${token}` },
+
+  const { response, newAccessToken } = await apiFetch(`/ideas/get/${id}`, {
     cache: "no-store",
-  });
-  const data = await res.json();
-  return NextResponse.json(data, { status: res.status });
+  } as RequestInit);
+
+  const data = await response.json();
+  const res = NextResponse.json(data, { status: response.status });
+  applyNewToken(res, newAccessToken);
+  return res;
 }
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const token = await getToken();
   const body = await req.text();
-  const res = await fetch(`${API()}/ideas/update/${id}`, {
+
+  const { response, newAccessToken } = await apiFetch(`/ideas/update/${id}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    headers: { "Content-Type": "application/json" },
     body,
   });
-  const data = await res.json();
-  return NextResponse.json(data, { status: res.status });
+
+  const data = await response.json();
+  const res = NextResponse.json(data, { status: response.status });
+  applyNewToken(res, newAccessToken);
+  return res;
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const token = await getToken();
-  const res = await fetch(`${API()}/ideas/delete/${id}`, {
+
+  const { response, newAccessToken } = await apiFetch(`/ideas/delete/${id}`, {
     method: "DELETE",
-    headers: { Authorization: `Bearer ${token}` },
   });
-  if (res.status === 204) return new NextResponse(null, { status: 204 });
-  const data = await res.json();
-  return NextResponse.json(data, { status: res.status });
+
+  // 204 No Content — no body to parse
+  if (response.status === 204) {
+    const res = new NextResponse(null, { status: 204 });
+    applyNewToken(res, newAccessToken);
+    return res;
+  }
+
+  const data = await response.json();
+  const res = NextResponse.json(data, { status: response.status });
+  applyNewToken(res, newAccessToken);
+  return res;
 }

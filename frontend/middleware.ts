@@ -36,8 +36,9 @@ async function tryRefresh(req: NextRequest): Promise<string | null> {
   try {
     const res = await fetch(`${apiBase}/auth/refresh`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: refreshToken }),
+      // FastAPI reads request.cookies.get("refresh_token") — must be a Cookie
+      // header, not a JSON body. Sending it in the body would always return 401.
+      headers: { Cookie: `refresh_token=${refreshToken}` },
     });
 
     if (!res.ok) return null;
