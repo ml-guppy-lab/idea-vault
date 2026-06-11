@@ -1,5 +1,12 @@
 # ---------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+# V4 Handoff + Quality Standards
+
+- V4 readiness checklist: `Readme/v4_readiness_checklist.md`
+- Engineering quality charter: `Readme/engineering_quality_charter.md`
+
+Use both docs as non-negotiable guardrails for planning and implementation.
+
 # To test one api - logout 
 
 # Step 1 — Log in now to get a fresh token
