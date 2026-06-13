@@ -1,38 +1,79 @@
-from sentence_transformers import SentenceTransformer
+"""
+Embedding service — abstraction layer for text-to-vector conversion.
+
+Uses Hugging Face Inference Providers via the official `huggingface_hub`
+client so the backend does not load any local embedding model into memory.
+
+The abstraction allows swapping providers in the future by:
+  1. Adding a new provider to EmbeddingProvider enum
+  2. Implementing generate_embedding() for that provider
+  3. Changing EMBEDDING_PROVIDER in .env
+"""
+
 from functools import lru_cache
 
+from huggingface_hub import InferenceClient
 
-# all-MiniLM-L6-v2: ~90 MB, 384-dim vectors, 256-token limit (~1 300 chars /
-# ~190 words). Chosen for fast cold-start on serverless hosting and high
-# retrieval quality for short English text. The summary field is intentionally
-# capped at 190 words so embeddings are always dense signal with no truncation.
-_MODEL_NAME = "all-MiniLM-L6-v2"
+from app.core.config import settings
+
+
+class EmbeddingProvider(str):
+    """Supported embedding providers."""
+    HUGGINGFACE = "huggingface"
+    # COHERE = "cohere"  # ready for future use
+    # OPENAI = "openai"  # ready for future use
+
+
+_HF_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 
 @lru_cache(maxsize=1)
-def get_embedding_model() -> SentenceTransformer:
-    """Load once, cache forever in the process. First call ~1 s; all subsequent calls instant."""
-    return SentenceTransformer(_MODEL_NAME)
+def get_huggingface_client() -> InferenceClient:
+    """
+    Create the Hugging Face client once and cache it.
+
+    InferenceClient talks to the supported Hugging Face routed inference API,
+    which avoids depending on the deprecated api-inference hostname directly.
+    """
+    if not settings.HUGGINGFACE_API_TOKEN:
+        raise ValueError(
+            "HUGGINGFACE_API_TOKEN is not set. "
+            "Get a free token from https://huggingface.co/settings/tokens"
+        )
+    return InferenceClient(
+        provider="hf-inference",
+        api_key=settings.HUGGINGFACE_API_TOKEN,
+        model=_HF_MODEL,
+    )
 
 
 def generate_embedding(text: str) -> list[float]:
-    """Encode a plain string -> 384-dim float vector."""
-    model = get_embedding_model()
-    return model.encode(text).tolist()
-
-
-def generate_idea_embedding(title: str, summary: str) -> list[float]:
-    # Title anchors the topic; summary provides semantic depth.
-    # Tags are used as $vectorSearch pre-filters, not embedded.
     """
-    Embed an idea's title and summary fields.
+    Convert text into a vector embedding using Hugging Face Inference Providers.
 
-    The summary is the single source of truth for vector search:
-    - User is constrained to ≤190 words on the frontend
-    - Backend schema enforces max_length=1300 chars as a safety net
-    - Description (unlimited length) is stored for display but never embedded
-    This design avoids chunking complexity and produces high-quality, dense vectors.
+    Returns a list of 384 floats representing the semantic meaning of the text.
+    Uses the sentence-transformers all-MiniLM-L6-v2 model.
     """
-    # Strip to be safe; the frontend already enforces the word limit
-    combined = f"{title}. {summary}"
-    return generate_embedding(combined.strip())
+    client = get_huggingface_client()
+    embedding = client.feature_extraction(text, model=_HF_MODEL)
+    return embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
+
+
+def generate_query_embedding(text: str) -> list[float]:
+    """
+    Convert a search query into a vector embedding.
+
+    Uses the same model as generate_embedding().
+    """
+    return generate_embedding(text)
+
+
+def generate_idea_embedding(title: str, summary: str = "") -> list[float]:
+    """
+    Generate an embedding for a complete idea.
+
+    Combines title and summary for richer semantic meaning. This is the embedding
+    stored in MongoDB and later queried against during semantic search.
+    """
+    combined_text = f"{title}. {summary}".strip()
+    return generate_embedding(combined_text)

@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     # Fallback used automatically when the primary model is rate-limited (429).
     # gpt-oss-120b is a 117B MoE model — low latency (5.1B active params) + native CoT.
     LLM_OPENROUTER_FALLBACK_MODEL: str = "openai/gpt-oss-120b:free"
+
+    # Embeddings — HuggingFace Inference API (zero memory footprint on server)
+    EMBEDDING_PROVIDER: str = "huggingface"
+    HUGGINGFACE_API_TOKEN: str = ""
     # Fast/small models used exclusively for intent classification (cheap, low-latency).
     LLM_CLASSIFIER_MODEL_OLLAMA: str = "qwen3:4b"
     LLM_CLASSIFIER_MODEL_OPENROUTER: str = "openai/gpt-oss-20b:free"

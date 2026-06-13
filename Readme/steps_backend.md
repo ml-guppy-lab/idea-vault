@@ -76,7 +76,7 @@ cp .env.example .env
 pip install -r requirements.txt
 
 # 5. Start dev server
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000python -m scripts.backfill_embeddings
 # → http://localhost:8000/docs
 ```
 
