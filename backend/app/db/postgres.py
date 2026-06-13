@@ -1,10 +1,58 @@
+from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import settings
 
-engine = create_async_engine(settings.DATABASE_URL, echo=False)
+
+def _build_engine_url(raw_url: str) -> tuple[str, dict]:
+    """
+    Normalise a PostgreSQL connection URL for asyncpg.
+
+    Neon (and other providers) give URLs with psycopg2-style query params
+    (sslmode=require, channel_binding=require) that asyncpg rejects outright.
+    This strips those params from the URL and returns the SSL flag separately
+    so it can be passed via connect_args instead, which is the correct path
+    for the asyncpg dialect.
+    """
+    parsed = urlparse(raw_url)
+
+    # Ensure the scheme is asyncpg-compatible
+    scheme = parsed.scheme
+    if scheme == "postgresql" or scheme == "postgres":
+        scheme = "postgresql+asyncpg"
+
+    # Strip params that asyncpg doesn't accept in the URL
+    _UNSUPPORTED = {"sslmode", "channel_binding", "ssl"}
+    qs = parse_qs(parsed.query, keep_blank_values=True)
+    ssl_requested = (
+        qs.pop("sslmode", [""])[0] in ("require", "verify-ca", "verify-full")
+        or qs.pop("ssl", [""])[0] in ("require", "true", "1")
+    )
+    qs.pop("channel_binding", None)  # always strip; asyncpg handles this internally
+
+    clean_url = urlunparse((
+        scheme,
+        parsed.netloc,
+        parsed.path,
+        parsed.params,
+        urlencode(qs, doseq=True),
+        parsed.fragment,
+    ))
+
+    connect_args: dict = {}
+    if ssl_requested:
+        import ssl as _ssl
+        ctx = _ssl.create_default_context()
+        connect_args["ssl"] = ctx
+
+    return clean_url, connect_args
+
+
+_db_url, _connect_args = _build_engine_url(settings.DATABASE_URL)
+engine = create_async_engine(_db_url, echo=False, connect_args=_connect_args)
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
