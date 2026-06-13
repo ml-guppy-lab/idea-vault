@@ -145,12 +145,12 @@ export default function TaskItem({ task, onStatusChange, onDelete }: TaskItemPro
         {STATUS_LABEL[task.status]}
       </span>
 
-      {/* Delete — appears on row hover via Tailwind group */}
+      {/* Delete — always visible on mobile, hover-only on md+ screens */}
       <button
         onClick={handleDelete}
         disabled={busy}
         aria-label="Delete task"
-        className="opacity-0 group-hover:opacity-100 transition-opacity"
+        className="opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
         style={{
           flexShrink: 0,
           background: "transparent",
