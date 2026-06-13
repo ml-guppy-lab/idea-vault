@@ -79,7 +79,6 @@ export default function ChatInput({
     >
       <textarea
         ref={textareaRef}
-        autoFocus={autoFocus}
         value={value}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
