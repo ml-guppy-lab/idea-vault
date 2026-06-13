@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, KeyboardEvent, ChangeEvent } from "react";
+import { useEffect, useState, useRef, KeyboardEvent, ChangeEvent } from "react";
 import { Send, Loader2 } from "lucide-react";
 
 interface ChatInputProps {
@@ -8,16 +8,27 @@ interface ChatInputProps {
   /** Disabled while the stream is open — prevents sending multiple requests. */
   disabled: boolean;
   placeholder?: string;
+  /** Autofocus the textarea when chat mounts/opens. */
+  autoFocus?: boolean;
 }
 
 export default function ChatInput({
   onSend,
   disabled,
   placeholder = "Ask about your ideas…",
+  autoFocus = true,
 }: ChatInputProps) {
   const [value, setValue]     = useState("");
   const [focused, setFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!autoFocus || disabled) return;
+    const id = window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [autoFocus, disabled]);
 
   function submit() {
     const trimmed = value.trim();
@@ -68,6 +79,7 @@ export default function ChatInput({
     >
       <textarea
         ref={textareaRef}
+        autoFocus={autoFocus}
         value={value}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
