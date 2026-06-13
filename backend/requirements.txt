@@ -31,6 +31,6 @@ resend[async]>=2.30.1       # Resend SDK for transactional emails (async extra e
 
 # AI/ML integration
 openai>=1.30.0               # OpenAI API client for AI features
-sentence-transformers==2.7.0   # For generating idea embeddings (semantic search)
+huggingface_hub>=0.24.0      # Hugging Face InferenceClient for hosted embeddings
 
-certifi>=2024.6.0             # SSL certificates (important for secure API calls, including OpenAI)
+certifi>=2024.6.0             # SSL certificates (important for secure API calls)

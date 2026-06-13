@@ -5,13 +5,16 @@ Uses MongoDB Atlas $vectorSearch with the `idea_embeddings` index (HNSW,
 cosine similarity, 384 dimensions). The index was created in the Atlas UI
 with a `userId` filter field so user isolation is enforced at the DB engine
 level, not just in application code.
+
+Embeddings are generated using HuggingFace's sentence-transformers model
+(all-MiniLM-L6-v2), which produces 384-dimensional vectors.
 """
 
 import asyncio
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.services.embedding_service import generate_embedding
+from app.services.embedding_service import generate_query_embedding
 
 
 async def search_similar_ideas(
@@ -27,7 +30,7 @@ async def search_similar_ideas(
 
     Flow:
         query string
-          -> generate_embedding()  (same model used at write time)
+          -> generate_query_embedding()  (HuggingFace Inference API)
           -> $vectorSearch against `idea_embeddings` Atlas index
           -> filter: userId + optional tag  (applied at index level)
           -> project: drop raw `embedding` array from results
@@ -49,15 +52,14 @@ async def search_similar_ideas(
         min_score: Minimum cosine similarity (0–1) a result must reach to be
                    returned. Prevents returning irrelevant ideas just because
                    they are the closest match in a small dataset. 0.60 is the
-                   practical floor for MiniLM on short summaries — below this
-                   the model has insufficient signal to discriminate. Summaries
-                   of 3–5 dense sentences will naturally push relevant scores
-                   above 0.80 and irrelevant ones below 0.55.
+                   practical floor for sentence-transformers on short summaries
+                   — below this the model has insufficient signal to discriminate.
+                   Summaries of 3–5 dense sentences will naturally push relevant
+                   scores above 0.80 and irrelevant ones below 0.55.
     """
-    # Embed the query in the same vector space as the stored idea embeddings.
-    # model.encode() is CPU-bound; offload to thread pool so the event loop
-    # isn't blocked while waiting for it.
-    query_embedding: list[float] = await asyncio.to_thread(generate_embedding, query)
+    # Embed the query using HuggingFace's API with the same model used for documents.
+    # This is a network call to HuggingFace's servers, not CPU-bound.
+    query_embedding: list[float] = await asyncio.to_thread(generate_query_embedding, query)
 
     # Build the userId + optional tag filter.
     # $vectorSearch applies this filter before cosine scoring —

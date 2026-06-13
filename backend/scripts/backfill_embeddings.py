@@ -33,13 +33,23 @@ from app.services.embedding_service import generate_idea_embedding
 async def backfill(dry_run: bool = False) -> None:
     settings = Settings()
 
+    # Validate required settings before starting
+    print(f"[DEBUG] EMBEDDING_PROVIDER: {settings.EMBEDDING_PROVIDER}")
+    print(f"[DEBUG] HUGGINGFACE_API_TOKEN set: {bool(settings.HUGGINGFACE_API_TOKEN)}")
+    print(f"[DEBUG] HUGGINGFACE_API_TOKEN length: {len(settings.HUGGINGFACE_API_TOKEN) if settings.HUGGINGFACE_API_TOKEN else 0}")
+
+    if not settings.HUGGINGFACE_API_TOKEN:
+        print("ERROR: HUGGINGFACE_API_TOKEN not set in .env file", file=sys.stderr)
+        return
+
     client = AsyncIOMotorClient(settings.MONGO_URI)
     db = client[settings.MONGO_DB_NAME]
 
     try:
         # Only process ideas that have no embedding yet.
         # This makes the script idempotent — safe to re-run at any time.
-        query = {"embedding": {"$exists": False}}
+        # query = {"embedding": {"$exists": False}}
+        query={}
         total = await db.ideas.count_documents(query)
 
         if total == 0:
@@ -67,8 +77,9 @@ async def backfill(dry_run: bool = False) -> None:
                 continue
 
             try:
-                # model.encode() is CPU-bound; offload to thread pool so the
-                # event loop stays free for other coroutines if any run alongside.
+                # HuggingFace API call; offload to thread pool so the event loop
+                # stays free for other coroutines if any run alongside.
+                # This is an async-safe wrapper around the sync requests library.
                 embedding = await asyncio.to_thread(generate_idea_embedding, title, summary)
 
                 # Targeted $set — only writes the embedding field.
