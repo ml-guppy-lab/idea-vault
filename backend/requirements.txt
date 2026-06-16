@@ -32,5 +32,6 @@ resend[async]>=2.30.1       # Resend SDK for transactional emails (async extra e
 # AI/ML integration
 openai>=1.30.0               # OpenAI API client for AI features
 huggingface_hub>=0.24.0      # Hugging Face InferenceClient for hosted embeddings
+numpy>=1.26.0                # Required by huggingface_hub feature_extraction() for embeddings
 
 certifi>=2024.6.0             # SSL certificates (important for secure API calls)
