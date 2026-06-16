@@ -82,6 +82,7 @@ export default function ChatWindow({ userId, compact = false, onClose }: ChatWin
   const [messages, setMessages] = useState<Message[]>(() => loadMessages(userId));
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState("");
+  const [sessionExpired, setSessionExpired] = useState(false);
   // Transient status from backend ("Searching your ideas...", etc.).
   // Cleared as soon as the first text token arrives — never persisted.
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -129,6 +130,14 @@ export default function ChatWindow({ userId, compact = false, onClose }: ChatWin
 
       // Non-2xx → backend returned a JSON error (e.g. 429 rate limit)
       if (!res.ok) {
+        if (res.status === 401) {
+          // Both access and refresh tokens are expired — session is fully gone.
+          // Remove the incomplete assistant bubble and show a session-expired banner.
+          setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+          setSessionExpired(true);
+          setStreaming(false);
+          return;
+        }
         const err = await res
           .json()
           .catch(() => ({ detail: "Something went wrong" }));
@@ -221,6 +230,7 @@ export default function ChatWindow({ userId, compact = false, onClose }: ChatWin
     setMessages(fresh);
     saveMessages(userId, fresh);
     setError("");
+    setSessionExpired(false);
   }
 
   // ── Shared colours ─────────────────────────────────────────────────────────
@@ -348,7 +358,45 @@ export default function ChatWindow({ userId, compact = false, onClose }: ChatWin
           <MessageBubble key={msg.id} message={msg} isDark={isDark} />
         ))}        {/* Status indicator — visible between user message and first LLM token */}
         <StatusIndicator message={statusMessage} />
-        {/* Error banner */}
+        {/* Session-expired banner — shown when both tokens are gone */}
+        {sessionExpired && (
+          <div
+            style={{
+              margin: "0.5rem 0",
+              padding: "0.7rem 1rem",
+              borderRadius: 12,
+              fontSize: "0.82rem",
+              background: "rgba(255,107,107,0.1)",
+              border: "1px solid rgba(255,107,107,0.3)",
+              color: "#FF6B6B",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "0.75rem",
+              flexWrap: "wrap",
+            }}
+          >
+            <span>Your session has expired. Please log in again to continue chatting.</span>
+            <a
+              href="/login"
+              style={{
+                flexShrink: 0,
+                padding: "0.3rem 0.8rem",
+                borderRadius: 8,
+                background: "rgba(255,107,107,0.2)",
+                color: "#FF6B6B",
+                fontWeight: 600,
+                textDecoration: "none",
+                fontSize: "0.8rem",
+                border: "1px solid rgba(255,107,107,0.35)",
+              }}
+            >
+              Log in
+            </a>
+          </div>
+        )}
+
+        {/* Generic error banner */}
         {error && (
           <div
             style={{
