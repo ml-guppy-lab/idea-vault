@@ -17,6 +17,7 @@ reply in separate UI sections, and to know when to hide the loading spinner.
 """
 
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -32,6 +33,7 @@ from app.schemas.chat import ChatRequest
 from app.services.rag_service import stream_rag_response
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+logger = logging.getLogger("app.chat")
 
 # ── Rate-limit constants ───────────────────────────────────────────────────────
 _RATE_LIMIT_MAX = 20        # messages allowed per window
@@ -125,8 +127,9 @@ async def chat(
                 user_id=user_id,
                 db=db,
             )
-        except Exception as exc:
-            yield _sse({"type": "error", "content": f"Failed to process your request: {exc}"})
+        except Exception:
+            logger.exception("[chat] decompose_and_route failed for user=%s", user_id)
+            yield _sse({"type": "error", "content": "Something went wrong. Please try again."})
             return
 
         # Show intent-specific status while the LLM generates the response

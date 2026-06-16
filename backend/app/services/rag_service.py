@@ -186,8 +186,9 @@ async def stream_rag_response(
     except RateLimitError:
         yield {"type": "error", "content": "LLM is temporarily unavailable. Please try again in a moment."}
         return
-    except Exception as exc:
-        yield {"type": "error", "content": f"Could not reach the AI model: {exc}"}
+    except Exception:
+        logger.exception("[rag] unexpected error creating LLM stream")
+        yield {"type": "error", "content": "Something went wrong. Please try again."}
         return
 
     # Yield reply tokens as they arrive
