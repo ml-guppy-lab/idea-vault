@@ -2,9 +2,8 @@ import enum
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, String, Text
+from sqlalchemy import ARRAY, Boolean, Date, DateTime, Enum, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
-from datetime import datetime
 
 from app.db.postgres import Base
 
@@ -30,6 +29,12 @@ class User(Base):
         Enum(AuthProvider, name="auth_provider_enum"),
         nullable=False,
         default=AuthProvider.local,
+    )
+    google_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, unique=True
+    )
+    auth_providers: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(

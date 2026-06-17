@@ -68,6 +68,22 @@ _is_secure = settings.FRONTEND_URL.startswith("https://")
 _REFRESH_COOKIE_MAX_AGE = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
 
 
+def _providers_for(user: User) -> list[str]:
+    """Return a mutable, de-duplicated provider list for the user."""
+    providers = list(user.auth_providers or [])
+    if not providers:
+        providers = [user.auth_provider.value]
+    return list(dict.fromkeys(providers))
+
+
+def _link_provider(user: User, provider: AuthProvider) -> None:
+    """Add a provider to auth_providers if it is not already linked."""
+    providers = _providers_for(user)
+    if provider.value not in providers:
+        providers.append(provider.value)
+    user.auth_providers = providers
+
+
 def _generate_token() -> tuple[str, str]:
     """Create a cryptographically secure one-time token.
 
@@ -178,6 +194,8 @@ async def register(
         # resend the email. No duplicate DB row is created.
         raw_token, token_hash = _generate_token()
         existing.hashed_password = hash_password(payload.password)
+        existing.auth_provider = AuthProvider.local
+        _link_provider(existing, AuthProvider.local)
         existing.verification_token_hash = token_hash
         existing.verification_token_expires = datetime.now(timezone.utc) + timedelta(hours=24)
         await db.commit()
@@ -193,6 +211,7 @@ async def register(
         email=payload.email,
         hashed_password=hash_password(payload.password),
         auth_provider=AuthProvider.local,
+        auth_providers=[AuthProvider.local.value],
         is_active=True,
         created_at=datetime.now(timezone.utc),
         email_verified=False,
@@ -249,6 +268,10 @@ async def login(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Please verify your email address before logging in. Check your inbox for the verification link.",
         )
+
+    # Record the provider used for this session and preserve linked providers.
+    user.auth_provider = AuthProvider.local
+    _link_provider(user, AuthProvider.local)
 
     # --- tokens ---
 
@@ -441,12 +464,28 @@ async def google_callback(
             detail="Could not retrieve email from Google. Make sure email scope is granted.",
         )
 
+    google_user_id = user_info.get("sub")
     email: str = user_info["email"]
+    if not google_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not verify your Google account. Please try again.",
+        )
 
     # --- Find or create the user in PostgreSQL ---
 
-    result = await db.execute(select(User).where(User.email == email))
+    result = await db.execute(select(User).where(User.google_id == google_user_id))
     user = result.scalar_one_or_none()
+
+    if not user:
+        result = await db.execute(select(User).where(User.email == email))
+        user = result.scalar_one_or_none()
+
+        if user and user.google_id and user.google_id != google_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This email is already linked to a different Google account.",
+            )
 
     if not user:
         # First time this Google account has logged in — create a new user row.
@@ -456,6 +495,8 @@ async def google_callback(
             email=email,
             hashed_password=None,
             auth_provider=AuthProvider.google,
+            google_id=google_user_id,
+            auth_providers=[AuthProvider.google.value],
             is_active=True,
             created_at=datetime.now(timezone.utc),
             email_verified=True,
@@ -463,6 +504,18 @@ async def google_callback(
         db.add(user)
         await db.commit()
         await db.refresh(user)  # reload to get the generated id
+    else:
+        # Existing account — link Google to the same UUID instead of creating
+        # a separate auth identity that would orphan the user's ideas.
+        user.google_id = google_user_id
+        user.auth_provider = AuthProvider.google
+        _link_provider(user, AuthProvider.google)
+        user.email_verified = True
+        user.verification_token_hash = None
+        user.verification_token_expires = None
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
 
     # Reject disabled accounts even for OAuth logins
     if not user.is_active:

@@ -80,6 +80,9 @@ async def init_db() -> None:
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS gender VARCHAR(30)",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth DATE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT",
+            # Linked-auth columns (v4)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_providers TEXT[] NOT NULL DEFAULT '{}'::TEXT[]",
             # Email verification columns (v2)
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token_hash VARCHAR(64)",
@@ -90,3 +93,12 @@ async def init_db() -> None:
         ]
         for stmt in migrations:
             await conn.execute(text(stmt))
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_google_id "
+            "ON users (google_id) WHERE google_id IS NOT NULL"
+        ))
+        await conn.execute(text(
+            "UPDATE users "
+            "SET auth_providers = ARRAY[auth_provider::text] "
+            "WHERE auth_providers IS NULL OR cardinality(auth_providers) = 0"
+        ))

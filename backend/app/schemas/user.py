@@ -2,7 +2,7 @@ import re
 from datetime import date, datetime
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.models.user import AuthProvider
 
@@ -40,6 +40,7 @@ class UserRead(BaseModel):
     display_name: Optional[str] = None
     avatar_url: Optional[str] = None
     auth_provider: str = "local"
+    auth_providers: list[str] = Field(default_factory=list)
     email_verified: bool = False
 
     model_config = {"from_attributes": True}
@@ -54,6 +55,7 @@ class ProfileRead(BaseModel):
     date_of_birth: Optional[date] = None
     avatar_url: Optional[str] = None
     auth_provider: str = "local"
+    auth_providers: list[str] = Field(default_factory=list)
     created_at: datetime
 
     model_config = {"from_attributes": True}

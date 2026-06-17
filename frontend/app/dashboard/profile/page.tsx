@@ -25,6 +25,7 @@ interface Profile {
   date_of_birth: string | null;
   avatar_url: string | null;
   auth_provider: string;
+  auth_providers: string[];
   created_at: string;
 }
 
@@ -272,7 +273,11 @@ export default function ProfilePage() {
   if (!profile) return null;
 
   const initial = (profile.display_name || profile.email).charAt(0).toUpperCase();
-  const isGoogleUser = profile.auth_provider === "google";
+  const providers = profile.auth_providers?.length
+    ? profile.auth_providers
+    : [profile.auth_provider];
+  const hasGoogleAuth = providers.includes("google");
+  const hasLocalAuth = providers.includes("local");
 
   return (
     <div
@@ -497,8 +502,8 @@ export default function ProfilePage() {
         </div>
       </form>
 
-      {/* ── Change password (local auth only) ──────────────────────── */}
-      {!isGoogleUser && (
+      {/* ── Change password (accounts with local auth linked) ──────── */}
+      {hasLocalAuth && (
         <form onSubmit={handleChangePassword}>
           <div style={cardStyle}>
             <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "1.5rem" }}>
@@ -620,12 +625,14 @@ export default function ProfilePage() {
         </form>
       )}
 
-      {/* ── Google user notice ───────────────────────────────────────── */}
-      {isGoogleUser && (
+      {/* ── Linked Google account notice ───────────────────────────── */}
+      {hasGoogleAuth && (
         <div style={{ ...cardStyle, background: isDark ? "rgba(100,80,180,0.1)" : "rgba(230,220,255,0.5)" }}>
           <p style={{ color: muted, fontSize: "0.9rem", margin: 0 }}>
-            <strong style={{ color: text }}>Signed in with Google.</strong>{" "}
-            Password management is handled by your Google account.
+            <strong style={{ color: text }}>Google account linked.</strong>{" "}
+            {hasLocalAuth
+              ? "You can sign in with either Google or your email/password."
+              : "Password management is handled by your Google account."}
           </p>
         </div>
       )}
