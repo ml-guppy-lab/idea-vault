@@ -160,3 +160,105 @@ A session-expired 401 needs a different UI response from other errors (429 rate 
 Users see a clear, actionable message when their session expires rather than a confusing generic error.
 
 ---
+
+## Fix: Hosted Embeddings Failed Because `numpy` Was Missing
+
+### Problem
+Idea creation succeeded, but embedding generation failed in the background and semantic search queries returned an error. The backend log showed:
+
+`ImportError: Please install numpy to use deal with embeddings (pip install numpy).`
+
+### Why this happened
+The app switched from a local sentence-transformers model to Hugging Face Inference Providers, but `huggingface_hub`'s `feature_extraction()` helper still depends on `numpy` locally to process the embedding response.
+
+### Final implementation
+- Add `numpy` to backend dependencies.
+- Rebuild the backend image so the package is installed in Docker/Render.
+- Re-run embedding backfill for any ideas that were saved while embeddings were failing.
+
+### Files changed
+- `backend/requirements.txt`
+	- Added `numpy>=1.26.0`
+
+### Result
+New ideas now embed successfully, background embedding no longer crashes, and semantic search works again.
+
+---
+
+## Fix: Raw Backend Exceptions Leaked Into Chat UI
+
+### Problem
+When chat-related backend failures occurred, the SSE error event included the raw Python exception text. Users could see internal implementation details like dependency/import errors, which is not acceptable for a production-style app.
+
+### Why this was wrong
+Internal stack or exception details belong in backend logs, not the UI. The UI should show a safe, professional message while developers still get full tracebacks server-side.
+
+### Final implementation
+- Replace user-facing exception strings with a neutral message:
+	- `Something went wrong. Please try again.`
+- Log the full exception and traceback on the backend with `logger.exception()`.
+- Keep the existing rate-limit message unchanged because it is already safe and useful to users.
+
+### Files changed
+- `backend/app/api/chat.py`
+	- Sanitized decompose/route failure sent through SSE
+	- Added backend logging with full traceback
+- `backend/app/services/rag_service.py`
+	- Sanitized unexpected LLM stream creation failures
+	- Added backend logging with full traceback
+
+### Result
+Users no longer see raw technical errors in chat, while developers still get complete debugging detail in backend logs.
+
+---
+
+## Fix: Prevent Duplicate Accounts When Local + Google Use the Same Email
+
+### Problem
+The app originally treated `auth_provider` as a single source of truth for identity. That breaks down when a user signs up with email/password first and later signs in with Google using the same email. Without account linking, the app risks creating or treating that as a separate auth identity, which would strand the user's MongoDB ideas under the original UUID.
+
+### Why this needed a schema change
+A single `auth_provider` field can only answer “what provider was used?” It cannot represent “this one user has linked both local and Google auth.” To support linking safely, the user record needs:
+- a stable Google identifier (`google_id`) from Google's `sub` claim
+- a list of linked providers (`auth_providers`)
+
+### Final implementation
+- Keep `auth_provider` for backward compatibility as the latest/active provider label.
+- Add `google_id` to identify the Google account by stable subject ID, not just email.
+- Add `auth_providers` to store all linked providers, e.g. `['local', 'google']`.
+- In Google OAuth callback:
+	- look up by `google_id` first
+	- if not found, look up by email
+	- if email exists, link Google to that existing user instead of creating a new user row
+	- only create a new user when neither lookup matches
+
+### Migration strategy
+- Startup migration adds `google_id` and `auth_providers` if missing
+- Existing users are backfilled so `auth_providers` starts as `[auth_provider]`
+- A unique partial index is added on `google_id` for non-null values
+
+### Password-management consequence
+Once an account is linked to both providers, it should still be allowed to change its local password. So password checks can no longer rely on `auth_provider == 'local'` alone. They must check whether `'local'` is present in `auth_providers`.
+
+### Files changed
+- `backend/app/models/user.py`
+	- Added `google_id`
+	- Added `auth_providers`
+- `backend/app/db/postgres.py`
+	- Added idempotent column migration for linked-auth fields
+	- Added partial unique index for `google_id`
+	- Backfilled `auth_providers` from legacy `auth_provider`
+- `backend/app/api/auth.py`
+	- Google callback now links by `google_id` / email instead of treating provider as a separate identity
+	- Local/Google logins preserve `auth_providers`
+- `backend/app/api/profile.py`
+	- Password change now checks for linked local auth, not just current provider
+- `backend/app/schemas/user.py`
+	- Added `auth_providers` to profile/user responses
+- `frontend/app/dashboard/profile/page.tsx`
+	- Profile UI now understands linked providers and only hides password controls for pure-Google accounts
+
+### Result
+One email now maps to one account/UUID even if the user signs in with both local auth and Google. Existing ideas remain reachable, and linked accounts keep the correct password-management behavior.
+
+---

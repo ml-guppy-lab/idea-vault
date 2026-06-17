@@ -86,8 +86,13 @@ async def change_password(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Google OAuth users never set a password with us — block this endpoint for them
-    if current_user.auth_provider != AuthProvider.local or not current_user.hashed_password:
+    providers = list(current_user.auth_providers or [])
+    if not providers:
+        providers = [current_user.auth_provider.value]
+
+    # Allow password changes for any account that has local auth linked,
+    # even if the latest login happened through Google.
+    if AuthProvider.local.value not in providers or not current_user.hashed_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password change is not available for accounts signed in with Google.",
