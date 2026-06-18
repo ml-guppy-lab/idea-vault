@@ -3,6 +3,9 @@ from typing import Any
 
 # These tool definitions are sent to the LLM and define the exact contract
 # for tool-calling in the agent loop.
+# Think of this file as the agent's "menu of allowed actions".
+# The model cannot call arbitrary Python functions - it can only call tools
+# whose name, description, and JSON parameter schema are declared here.
 AGENT_TOOLS: list[dict[str, Any]] = [
 	{
 		"type": "function",
@@ -173,9 +176,12 @@ AGENT_TOOLS: list[dict[str, Any]] = [
 
 
 # Tool names that execute immediately without user approval.
+# These are safe because they only read data and never modify MongoDB.
 READ_ONLY_TOOLS: frozenset[str] = frozenset({"search_ideas"})
 
 # Tool names that require explicit user approval before any write execution.
+# The agent may propose these actions, but the backend will not execute them
+# until a separate /agent/decide call arrives with decision="accept".
 PROPOSAL_TOOLS: frozenset[str] = frozenset(
 	{"propose_idea_update", "propose_idea_creation", "propose_task_creation"}
 )
