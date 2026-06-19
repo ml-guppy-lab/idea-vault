@@ -744,3 +744,232 @@ The backend now supports a production-style beginner-safe agent workflow:
 - tool results are serialized safely for the LLM loop
 
 This is a good foundation for a future frontend proposal-review experience, because the backend contracts are now explicit and tested.
+
+---
+
+## Agentic AI Frontend: Non-Streaming Agent Chat + Proposal Review UI
+
+### Why a separate frontend mode was needed
+The existing chat page was built for streaming RAG responses. That works well when the output is only text.
+
+Agent responses are different. They need to return:
+- assistant text
+- a structured `proposals` array
+
+Because proposal objects must arrive as valid JSON, the agent frontend was built as a non-streaming request/response UI. The user sees a loading indicator while the backend prepares both text and proposals.
+
+This keeps implementation simpler and more reliable while preserving the human-in-the-loop review flow.
+
+### Two chat modes (important UX decision)
+The app now has two separate AI experiences:
+
+1. **Vault AI** (`/dashboard/chat`)
+	- RAG-style, read-only assistant
+	- streaming text tokens via SSE
+
+2. **Vault AI Agent** (`/dashboard/agent`)
+	- proposal-oriented assistant
+	- non-streaming JSON response with text + proposals
+	- explicit Accept/Reject controls
+
+Keeping these modes separate avoids user confusion about whether the current conversation can change data.
+
+---
+
+## Diff + Proposal Components
+
+### `DiffView` component
+File: `frontend/components/agent/DiffView.tsx`
+
+Purpose:
+- render before/after changes in a GitHub-style visual diff pattern
+
+Behavior:
+- if old and new values are identical, render nothing
+- old value uses red styling + strikethrough
+- new value uses green styling
+- responsive layout: stacks on small screens, two-column on larger screens
+
+Why this matters:
+- it makes proposal review understandable at a glance
+- it reduces accidental approvals because users can clearly see what changed
+
+### `ProposalCard` component
+File: `frontend/components/agent/ProposalCard.tsx`
+
+Purpose:
+- render one proposal with context, diff/details, reasoning, and Accept/Reject actions
+
+Proposal types handled:
+- `idea_update`
+- `idea_creation`
+- `task_creation`
+
+Key UI states:
+- pending review
+- accepting (button loading state)
+- accepted confirmation
+- rejected confirmation
+
+Why this structure was chosen:
+- each proposal is self-contained
+- each proposal can be approved/rejected independently
+- card-level status updates keep interaction feedback immediate
+
+---
+
+## Agent Chat Window (frontend)
+
+### `AgentChatWindow`
+File: `frontend/components/agent/AgentChatWindow.tsx`
+
+Responsibilities:
+- render user and assistant messages
+- call BFF endpoint `/api/agent` (non-streaming)
+- attach proposals to assistant messages
+- render proposal cards under assistant message bubbles
+- send proposal decisions to `/api/agent/decide`
+
+Important implementation details:
+- uses existing `ChatInput` and `MessageBubble` components for visual consistency
+- uses loading dots while waiting for backend response
+- includes suggested action buttons to guide first-time users
+- handles 401 with a clear session-expired message
+- parses backend error payload defensively (`detail`, `error`, fallback message)
+
+Reasoning for non-streaming behavior:
+- agent endpoint returns structured JSON, not token stream
+- streaming mixed text + object payloads adds complexity without clear benefit here
+
+---
+
+## Next.js BFF Routes for Agent
+
+### Files added
+- `frontend/app/api/agent/route.ts`
+- `frontend/app/api/agent/decide/route.ts`
+
+### Why these routes exist
+The browser should not call FastAPI directly with bearer tokens in JS-managed storage.
+
+These BFF routes:
+- read auth from secure cookies through the server
+- forward requests to FastAPI
+- return backend response with stable status mapping
+- preserve refresh behavior by reusing central server fetch utilities
+
+### Engineering decision (important)
+Instead of custom per-route token plumbing, these routes reuse:
+- `apiFetch()`
+- `applyNewToken()`
+
+This keeps auth refresh and cookie propagation consistent with the rest of the app and avoids duplicate logic.
+
+---
+
+## Agent Page + Navigation
+
+### New page
+File: `frontend/app/dashboard/agent/page.tsx`
+
+What it does:
+- renders a dedicated full-page container for agent mode
+- title: `Vault AI Agent`
+- subtitle: `Propose changes to your ideas - you always decide what gets applied.`
+- mounts `AgentChatWindow`
+
+### Navbar update
+File: `frontend/components/Navbar.tsx`
+
+Change:
+- added a new `AI Agent` nav item (`/dashboard/agent`) with `Bot` icon
+- kept existing `Vault AI` nav item (`/dashboard/chat`) unchanged
+
+Result:
+- users can intentionally choose read-only chat vs proposal-based agent mode
+
+---
+
+## Preview / Test Surface
+
+### Proposal preview page
+File: `frontend/app/dashboard/agent-preview/page.tsx`
+
+Purpose:
+- quick visual test page with sample proposal data
+- allows validating card states and diff rendering without backend calls
+
+Use case:
+- useful for UI iteration when backend is unavailable or rate-limited
+
+---
+
+## Reliability Notes from Real Testing
+
+### OpenRouter free-tier limits can still fail even with fallback
+Observed behavior during testing:
+- primary model rate-limited (429)
+- fallback model attempted
+- fallback can also be rate-limited under provider free quota windows
+
+Implication:
+- retries + fallback improve reliability but do not guarantee success when all selected models share free-tier pressure
+
+Mitigations:
+- keep user-facing errors safe and actionable
+- consider paid/BYOK configuration for stable usage
+- keep fallback model configurable through environment settings
+
+---
+
+## End-to-End Agentic Flow (Backend + Frontend)
+
+1. User opens `/dashboard/agent` and sends a request.
+2. Frontend BFF calls `POST /api/agent` on backend.
+3. Backend agent reasons, may call tools, and returns:
+	- assistant `message`
+	- `proposals[]`
+4. Frontend renders assistant message and proposal cards.
+5. User reviews diffs and reasoning.
+6. User chooses:
+	- Reject: UI state updates, no DB mutation.
+	- Accept: frontend calls `POST /api/agent/decide` with full proposal payload.
+7. Backend executes approved proposal under authenticated user scope.
+8. Frontend shows success/rejection state in the proposal card.
+
+This completes the human-in-the-loop pattern in production-style UX.
+
+---
+
+## Files Added or Updated for Agent Frontend
+
+- `frontend/components/agent/DiffView.tsx`
+	- before/after diff renderer
+- `frontend/components/agent/ProposalCard.tsx`
+	- per-proposal review + accept/reject controls
+- `frontend/components/agent/AgentChatWindow.tsx`
+	- non-streaming agent chat experience with proposal rendering
+- `frontend/app/api/agent/route.ts`
+	- BFF proxy for agent run endpoint
+- `frontend/app/api/agent/decide/route.ts`
+	- BFF proxy for proposal decision endpoint
+- `frontend/app/dashboard/agent/page.tsx`
+	- dedicated agent mode page
+- `frontend/components/Navbar.tsx`
+	- added `AI Agent` nav link
+- `frontend/app/dashboard/agent-preview/page.tsx`
+	- sample-data visual test page for proposal UI
+
+---
+
+## Final Outcome (Agentic AI v4)
+
+The project now has a complete agentic AI flow with clear separation of concerns:
+
+- backend agent reasoning + tool orchestration
+- strict human approval before writes
+- frontend proposal diffs and per-proposal controls
+- secure BFF integration with centralized token refresh behavior
+- distinct UX modes for read-only AI chat vs change-proposing AI agent
+
+This implementation is beginner-friendly to understand, production-minded in structure, and strong for portfolio demonstration because it shows full-stack agentic patterns, not just prompt wiring.
