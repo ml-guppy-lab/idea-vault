@@ -262,3 +262,714 @@ Once an account is linked to both providers, it should still be allowed to chang
 One email now maps to one account/UUID even if the user signs in with both local auth and Google. Existing ideas remain reachable, and linked accounts keep the correct password-management behavior.
 
 ---
+
+## Agentic AI Backend: One Agent, Multiple Tools, Human Approval Before Writes
+
+### Why this feature was added
+The existing app could already store ideas, search ideas, and run a chat flow. The next step was to make the system feel more like an assistant that can take structured action.
+
+The goal was **not** to build a swarm of agents. The goal was to build **one backend agent** that can:
+- understand a user request
+- look up the user's existing ideas
+- decide when a change should be proposed
+- return a structured proposal instead of mutating data immediately
+- wait for explicit user approval before writing anything to MongoDB
+
+This is a simple but real agentic pattern:
+- an LLM reasons over the request
+- the LLM can call tools
+- some tools are safe to execute immediately
+- some tools are write-intents and therefore require a human decision
+
+That makes the feature useful without giving the model direct write access.
+
+### High-level architecture
+This implementation is **one agent with multiple tools**, not multiple agents.
+
+The components are:
+
+1. **Tool contract layer**
+	- Defines what tools the LLM is allowed to call.
+	- File: `backend/app/services/agentic_ai/agent_tools.py`
+
+2. **Schema layer**
+	- Defines what a valid proposal looks like.
+	- File: `backend/app/schemas/agent.py`
+
+3. **Agent service layer**
+	- Runs the LLM loop, executes read tools, creates proposals, and applies approved proposals.
+	- File: `backend/app/services/agentic_ai/agent_service.py`
+
+4. **API layer**
+	- Exposes the agent endpoints to Swagger and the frontend.
+	- File: `backend/app/api/agent.py`
+
+5. **Existing app services reused by the agent**
+	- MongoDB access
+	- semantic search / vector search
+	- embeddings refresh on idea updates
+	- user authentication from JWT
+
+So the agent was not built as a separate mini-application. It sits on top of the current backend and reuses the app's real business logic.
+
+### The core design principle: propose first, write later
+The most important design decision in this feature is that the agent does **not** write to the database during the first `/api/agent` call.
+
+That request is read-only from a data-mutation perspective.
+
+Instead, the first call returns:
+- a normal assistant message
+- zero or more structured proposals
+
+Only after the user explicitly accepts one proposal does the backend execute the write.
+
+This gives three major benefits:
+
+1. **Safety**
+	- The model cannot silently rename ideas or create tasks.
+
+2. **Auditability**
+	- The user can see exactly what the model wants to change.
+
+3. **Better UX**
+	- The proposal contains the current and new values, so the UI can show a clear diff.
+
+This is the reason the implementation is called **human-in-the-loop**.
+
+### Tools exposed to the LLM
+The agent currently has four tools.
+
+#### 1. `search_ideas`
+Purpose:
+- search the user's existing ideas before making a proposal
+
+Why it is safe:
+- it only reads data
+- it does not mutate anything
+
+How it behaves:
+- the model passes a text query
+- the backend uses semantic search behavior already present in the app
+- if vector search finds nothing, the backend falls back to recent ideas
+
+This fallback matters because generic prompts like:
+- `improve my first idea`
+- `help me refine my ideas`
+
+may not semantically match a specific idea strongly enough to pass the vector threshold.
+
+#### 2. `propose_idea_update`
+Purpose:
+- suggest changes to an existing idea
+
+Expected payload includes:
+- `idea_id`
+- `current_title`
+- `new_title`
+- optional description/status/priority changes
+- `reasoning`
+
+Important rule:
+- the model should search first so it uses a real `idea_id` and real current content
+
+#### 3. `propose_idea_creation`
+Purpose:
+- propose a brand new idea for the user
+
+Expected payload includes:
+- `title`
+- `description`
+- optional `status`
+- optional `priority`
+- optional `tags`
+- `reasoning`
+
+#### 4. `propose_task_creation`
+Purpose:
+- propose a new task under an existing idea
+
+Expected payload includes:
+- `idea_id`
+- `idea_title`
+- `task_title`
+- optional `task_description`
+- `reasoning`
+
+### Read tools vs proposal tools
+The tools are intentionally split into two groups.
+
+#### Read-only tools
+Current member:
+- `search_ideas`
+
+These execute immediately inside the agent loop because they do not change user data.
+
+#### Proposal tools
+Current members:
+- `propose_idea_update`
+- `propose_idea_creation`
+- `propose_task_creation`
+
+These do **not** execute immediately. The backend converts their arguments into typed proposal objects and returns them to the user for approval.
+
+This separation is the backbone of the safety model.
+
+### Proposal schema design
+The proposal models live in `backend/app/schemas/agent.py`.
+
+There are three concrete proposal models:
+- `IdeaUpdateProposal`
+- `IdeaCreationProposal`
+- `TaskCreationProposal`
+
+All of them are wrapped in a discriminated union called `Proposal`.
+
+That means every proposal must include:
+- `proposal_type`
+
+The backend uses `proposal_type` to decide which schema to parse.
+
+This is why a payload like `{}` fails validation for `proposal`: the parser cannot infer which proposal shape it is supposed to be.
+
+#### Why the discriminated union was useful
+It gave a strong contract for:
+- backend validation
+- Swagger schema generation
+- frontend rendering
+- future expansion to new proposal types
+
+It also helped catch malformed approve/reject payloads during testing instead of allowing silent bad writes.
+
+### API surface
+Two endpoints were added.
+
+#### `POST /api/agent`
+Purpose:
+- run one agent turn for the authenticated user
+
+Input:
+- the same `ChatRequest` shape used elsewhere, mainly a `message`
+
+Output:
+- `message`: assistant explanation
+- `proposals`: array of typed pending proposals
+
+Important behavior:
+- no database write happens here
+
+#### `POST /api/agent/decide`
+Purpose:
+- accept or reject one proposal
+
+Input shape:
+- `proposal_id`
+- `decision` = `accept` or `reject`
+- `proposal` only required when decision is `accept`
+
+Behavior:
+- reject: returns success, changes nothing
+- accept: executes exactly one approved proposal under the authenticated user's scope
+
+### How one full agent turn works internally
+The heart of the system is `run_agent()` in `backend/app/services/agentic_ai/agent_service.py`.
+
+The flow is:
+
+1. Build the initial message list
+	- system prompt
+	- user's message
+
+2. Send the request to the LLM with the tool definitions
+	- tool choice is `auto`
+	- the model can either answer directly or call tools
+
+3. If the model answers directly
+	- finish and return the message
+
+4. If the model calls tools
+	- save the assistant tool-call step into message history
+	- execute each tool according to its category
+
+5. For read-only tools
+	- execute immediately
+	- serialize the tool result to JSON
+	- append it as a tool message back into the conversation
+
+6. For proposal tools
+	- do not write to the database
+	- convert raw tool arguments into typed proposal objects
+	- store them in the `proposals` list
+	- return a small `proposal_created` tool result into message history
+
+7. Ask the model for a final user-facing summary
+	- especially useful when the model created proposals
+
+8. Return `AgentResponse`
+	- final message
+	- proposals array
+
+The loop is capped at 3 turns so it cannot keep looping indefinitely.
+
+### Why the agent stores tool calls in message history
+When a tool call happens, the backend converts the SDK's tool-call objects into plain dictionaries and appends them to the ongoing `messages` list.
+
+This matters because the next model call needs to see:
+- what it previously decided
+- which tools it called
+- what those tools returned
+
+Without that history, the model would lose context between steps and could not reason reliably over retrieved ideas or created proposals.
+
+### Why proposal IDs are generated server-side
+Each proposal gets a UUID generated on the backend.
+
+That decision makes approval cleaner because:
+- the frontend gets a stable identifier for each pending proposal
+- accept/reject calls can refer to a concrete proposal
+- the ID is not invented by the model
+
+This keeps proposal tracking deterministic and avoids trusting the model for control-plane identifiers.
+
+### How approved proposals are executed
+The write path lives in `execute_proposal()`.
+
+This function is intentionally the **only** place in the service that mutates MongoDB for the agent flow.
+
+That makes the system easier to reason about:
+- `run_agent()` = reasoning + safe reads + proposal generation
+- `execute_proposal()` = actual writes after approval
+
+#### Idea update path
+When an idea update is accepted, the backend:
+- parses the `idea_id` into a Mongo `ObjectId`
+- checks ownership with `_id` + `userId`
+- builds an update document
+- writes title/description/status/priority changes
+- refreshes `updatedAt`
+
+There is also an embedding-refresh step if the title changes.
+
+Why that exists:
+- semantic search depends on embeddings
+- if the idea title changes significantly, the old embedding may no longer represent the idea well
+
+So after approval, the backend attempts to regenerate the embedding and store it.
+
+#### Idea creation path
+When an idea creation proposal is accepted, the backend creates a new Mongo idea document under the authenticated user's `userId`.
+
+#### Task creation path
+When a task proposal is accepted, the backend:
+- validates the parent idea belongs to the user
+- creates a new task object
+- appends it to that idea's embedded tasks array
+
+### Security model
+This implementation was designed so the model has limited power.
+
+#### What the model can do
+- interpret user intent
+- call approved tools
+- suggest structured changes
+
+#### What the model cannot do directly
+- write to MongoDB on the first call
+- bypass user ownership checks
+- invent trusted user identity
+- update another user's ideas
+
+#### How user scoping is enforced
+Every important path uses the authenticated user from the JWT-derived backend user object.
+
+The client never supplies `userId` for the agent.
+
+That means:
+- reads are scoped to the authenticated user's ideas
+- writes are also scoped to that same user
+
+Even if the model produces a valid-looking `idea_id`, the backend still checks ownership before applying any update.
+
+### LLM provider behavior and fallback
+The agent uses the same OpenAI-compatible client pattern already used elsewhere in the backend.
+
+For OpenRouter specifically, free-tier models can hit temporary 429 rate limits.
+
+To make the agent resilient, the service now:
+- retries transient `RateLimitError` failures
+- uses exponential backoff
+- switches to the configured fallback model if retries still fail
+
+This was necessary because the initial implementation would crash `/api/agent` if the primary free model was rate-limited.
+
+### Search behavior and why the first implementation was misleading
+One of the most important debugging lessons from this feature was that the agent's first search implementation was **too strict**.
+
+Originally, the `search_ideas` tool called vector search directly.
+
+That caused a bad user experience for generic requests such as:
+- `Can you improve my first idea?`
+
+Why it failed:
+- vector search tries to find semantically similar idea content
+- a vague query may not match any stored idea strongly enough
+- the tool returned an empty list
+- the model interpreted that as `you have no ideas`
+
+The fix was to reuse the app's existing semantic-search handler, which already falls back to recent ideas if vector search returns nothing.
+
+That aligned the agent with the rest of the backend and made the tool far more reliable for natural user requests.
+
+### JSON serialization issue that appeared during testing
+The first live test of `/api/agent` failed because the tool result contained MongoDB datetimes.
+
+What happened:
+- `search_ideas` returned idea documents
+- those documents included `createdAt` and `updatedAt`
+- the backend tried to `json.dumps()` the tool result before feeding it back to the LLM
+- Python raised `TypeError: Object of type datetime is not JSON serializable`
+
+The fix was to add a helper that recursively converts datetime objects to ISO strings before serializing tool results.
+
+This is an important agent implementation detail: tool outputs often need normalization before they are safe to pass back into the LLM conversation.
+
+### Swagger testing lessons
+Swagger was useful for validating the backend contracts, but it also exposed where the request shapes can be confusing.
+
+#### Reject payload shape
+For rejection, this works:
+
+```json
+{
+  "proposal_id": "...",
+  "decision": "reject"
+}
+```
+
+This also works:
+
+```json
+{
+  "proposal_id": "...",
+  "decision": "reject",
+  "proposal": null
+}
+```
+
+This fails:
+
+```json
+{
+  "proposal_id": "...",
+  "decision": "reject",
+  "proposal": {}
+}
+```
+
+Why:
+- `proposal` is a discriminated union
+- `{}` has no `proposal_type`
+- the parser cannot decide which proposal schema to use
+
+#### Accept payload shape
+For acceptance, `proposal` must be **one proposal object**, not the whole `proposals` array and not a nested decision wrapper.
+
+Correct pattern:
+
+```json
+{
+  "proposal_id": "...",
+  "decision": "accept",
+  "proposal": {
+    "proposal_type": "idea_update",
+    "proposal_id": "...",
+    "status": "pending",
+    "idea_id": "...",
+    "current_title": "...",
+    "new_title": "...",
+    "current_description": "...",
+    "new_description": "...",
+    "new_status": null,
+    "new_priority": null,
+    "reasoning": "..."
+  }
+}
+```
+
+Incorrect patterns that were hit during testing:
+- invalid JSON syntax such as `{"proposal": {[ ... ]}}`
+- wrapping a whole decision payload inside `proposal`
+- sending the `proposals` array item as an array instead of a single object
+
+### Why this is already a real agentic workflow
+For a beginner, it is useful to separate hype from what was actually built.
+
+This backend is genuinely agentic because:
+- the model has a toolset
+- the model chooses when to use tools
+- tool results are fed back into the reasoning loop
+- the model can produce structured action plans
+- actions are separated into safe reads vs gated writes
+
+What it is **not**:
+- not a fully autonomous system
+- not a multi-agent architecture
+- not long-running planning with memory across many sessions
+
+This is a strong first agentic AI implementation because it demonstrates the most important primitive clearly:
+
+**LLM reasoning + tool use + structured proposals + human approval + controlled execution**
+
+### Files involved in the implementation
+- `backend/app/services/agentic_ai/agent_tools.py`
+	- tool contracts sent to the LLM
+- `backend/app/schemas/agent.py`
+	- proposal models, union types, response/decision contracts
+- `backend/app/services/agentic_ai/agent_service.py`
+	- main agent loop, tool execution, proposal building, proposal execution, rate-limit fallback, JSON-safe serialization
+- `backend/app/api/agent.py`
+	- HTTP endpoints for running the agent and deciding on proposals
+- `backend/app/main.py`
+	- router registration
+- `backend/app/ai/handlers.py`
+	- semantic search fallback reused by the agent's read tool
+
+### Final result
+The backend now supports a production-style beginner-safe agent workflow:
+- users can ask the assistant to improve ideas, create ideas, or suggest tasks
+- the model can inspect the user's real data before suggesting changes
+- no write happens without explicit approval
+- accepted proposals are executed under proper user scoping
+- the service handles rate limits more gracefully
+- generic search requests no longer incorrectly imply the vault is empty
+- tool results are serialized safely for the LLM loop
+
+This is a good foundation for a future frontend proposal-review experience, because the backend contracts are now explicit and tested.
+
+---
+
+## Agentic AI Frontend: Non-Streaming Agent Chat + Proposal Review UI
+
+### Why a separate frontend mode was needed
+The existing chat page was built for streaming RAG responses. That works well when the output is only text.
+
+Agent responses are different. They need to return:
+- assistant text
+- a structured `proposals` array
+
+Because proposal objects must arrive as valid JSON, the agent frontend was built as a non-streaming request/response UI. The user sees a loading indicator while the backend prepares both text and proposals.
+
+This keeps implementation simpler and more reliable while preserving the human-in-the-loop review flow.
+
+### Two chat modes (important UX decision)
+The app now has two separate AI experiences:
+
+1. **Vault AI** (`/dashboard/chat`)
+	- RAG-style, read-only assistant
+	- streaming text tokens via SSE
+
+2. **Vault AI Agent** (`/dashboard/agent`)
+	- proposal-oriented assistant
+	- non-streaming JSON response with text + proposals
+	- explicit Accept/Reject controls
+
+Keeping these modes separate avoids user confusion about whether the current conversation can change data.
+
+---
+
+## Diff + Proposal Components
+
+### `DiffView` component
+File: `frontend/components/agent/DiffView.tsx`
+
+Purpose:
+- render before/after changes in a GitHub-style visual diff pattern
+
+Behavior:
+- if old and new values are identical, render nothing
+- old value uses red styling + strikethrough
+- new value uses green styling
+- responsive layout: stacks on small screens, two-column on larger screens
+
+Why this matters:
+- it makes proposal review understandable at a glance
+- it reduces accidental approvals because users can clearly see what changed
+
+### `ProposalCard` component
+File: `frontend/components/agent/ProposalCard.tsx`
+
+Purpose:
+- render one proposal with context, diff/details, reasoning, and Accept/Reject actions
+
+Proposal types handled:
+- `idea_update`
+- `idea_creation`
+- `task_creation`
+
+Key UI states:
+- pending review
+- accepting (button loading state)
+- accepted confirmation
+- rejected confirmation
+
+Why this structure was chosen:
+- each proposal is self-contained
+- each proposal can be approved/rejected independently
+- card-level status updates keep interaction feedback immediate
+
+---
+
+## Agent Chat Window (frontend)
+
+### `AgentChatWindow`
+File: `frontend/components/agent/AgentChatWindow.tsx`
+
+Responsibilities:
+- render user and assistant messages
+- call BFF endpoint `/api/agent` (non-streaming)
+- attach proposals to assistant messages
+- render proposal cards under assistant message bubbles
+- send proposal decisions to `/api/agent/decide`
+
+Important implementation details:
+- uses existing `ChatInput` and `MessageBubble` components for visual consistency
+- uses loading dots while waiting for backend response
+- includes suggested action buttons to guide first-time users
+- handles 401 with a clear session-expired message
+- parses backend error payload defensively (`detail`, `error`, fallback message)
+
+Reasoning for non-streaming behavior:
+- agent endpoint returns structured JSON, not token stream
+- streaming mixed text + object payloads adds complexity without clear benefit here
+
+---
+
+## Next.js BFF Routes for Agent
+
+### Files added
+- `frontend/app/api/agent/route.ts`
+- `frontend/app/api/agent/decide/route.ts`
+
+### Why these routes exist
+The browser should not call FastAPI directly with bearer tokens in JS-managed storage.
+
+These BFF routes:
+- read auth from secure cookies through the server
+- forward requests to FastAPI
+- return backend response with stable status mapping
+- preserve refresh behavior by reusing central server fetch utilities
+
+### Engineering decision (important)
+Instead of custom per-route token plumbing, these routes reuse:
+- `apiFetch()`
+- `applyNewToken()`
+
+This keeps auth refresh and cookie propagation consistent with the rest of the app and avoids duplicate logic.
+
+---
+
+## Agent Page + Navigation
+
+### New page
+File: `frontend/app/dashboard/agent/page.tsx`
+
+What it does:
+- renders a dedicated full-page container for agent mode
+- title: `Vault AI Agent`
+- subtitle: `Propose changes to your ideas - you always decide what gets applied.`
+- mounts `AgentChatWindow`
+
+### Navbar update
+File: `frontend/components/Navbar.tsx`
+
+Change:
+- added a new `AI Agent` nav item (`/dashboard/agent`) with `Bot` icon
+- kept existing `Vault AI` nav item (`/dashboard/chat`) unchanged
+
+Result:
+- users can intentionally choose read-only chat vs proposal-based agent mode
+
+---
+
+## Preview / Test Surface
+
+### Proposal preview page
+File: `frontend/app/dashboard/agent-preview/page.tsx`
+
+Purpose:
+- quick visual test page with sample proposal data
+- allows validating card states and diff rendering without backend calls
+
+Use case:
+- useful for UI iteration when backend is unavailable or rate-limited
+
+---
+
+## Reliability Notes from Real Testing
+
+### OpenRouter free-tier limits can still fail even with fallback
+Observed behavior during testing:
+- primary model rate-limited (429)
+- fallback model attempted
+- fallback can also be rate-limited under provider free quota windows
+
+Implication:
+- retries + fallback improve reliability but do not guarantee success when all selected models share free-tier pressure
+
+Mitigations:
+- keep user-facing errors safe and actionable
+- consider paid/BYOK configuration for stable usage
+- keep fallback model configurable through environment settings
+
+---
+
+## End-to-End Agentic Flow (Backend + Frontend)
+
+1. User opens `/dashboard/agent` and sends a request.
+2. Frontend BFF calls `POST /api/agent` on backend.
+3. Backend agent reasons, may call tools, and returns:
+	- assistant `message`
+	- `proposals[]`
+4. Frontend renders assistant message and proposal cards.
+5. User reviews diffs and reasoning.
+6. User chooses:
+	- Reject: UI state updates, no DB mutation.
+	- Accept: frontend calls `POST /api/agent/decide` with full proposal payload.
+7. Backend executes approved proposal under authenticated user scope.
+8. Frontend shows success/rejection state in the proposal card.
+
+This completes the human-in-the-loop pattern in production-style UX.
+
+---
+
+## Files Added or Updated for Agent Frontend
+
+- `frontend/components/agent/DiffView.tsx`
+	- before/after diff renderer
+- `frontend/components/agent/ProposalCard.tsx`
+	- per-proposal review + accept/reject controls
+- `frontend/components/agent/AgentChatWindow.tsx`
+	- non-streaming agent chat experience with proposal rendering
+- `frontend/app/api/agent/route.ts`
+	- BFF proxy for agent run endpoint
+- `frontend/app/api/agent/decide/route.ts`
+	- BFF proxy for proposal decision endpoint
+- `frontend/app/dashboard/agent/page.tsx`
+	- dedicated agent mode page
+- `frontend/components/Navbar.tsx`
+	- added `AI Agent` nav link
+- `frontend/app/dashboard/agent-preview/page.tsx`
+	- sample-data visual test page for proposal UI
+
+---
+
+## Final Outcome (Agentic AI v4)
+
+The project now has a complete agentic AI flow with clear separation of concerns:
+
+- backend agent reasoning + tool orchestration
+- strict human approval before writes
+- frontend proposal diffs and per-proposal controls
+- secure BFF integration with centralized token refresh behavior
+- distinct UX modes for read-only AI chat vs change-proposing AI agent
+
+This implementation is beginner-friendly to understand, production-minded in structure, and strong for portfolio demonstration because it shows full-stack agentic patterns, not just prompt wiring.
