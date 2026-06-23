@@ -63,12 +63,6 @@ async def _ensure_unique_collection_name(
     status_code=status.HTTP_201_CREATED,
     summary="Create a collection",
 )
-@router.post(
-    "/create",
-    response_model=CollectionResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Create a collection",
-)
 async def create_collection(
     payload: CollectionCreate,
     current_user: User = Depends(get_current_user),
@@ -102,12 +96,6 @@ async def create_collection(
 
 @router.get(
     "",
-    response_model=list[CollectionResponse],
-    status_code=status.HTTP_200_OK,
-    summary="List all collections for the logged-in user",
-)
-@router.get(
-    "/list",
     response_model=list[CollectionResponse],
     status_code=status.HTTP_200_OK,
     summary="List all collections for the logged-in user",
@@ -159,12 +147,6 @@ async def get_collection(
     status_code=status.HTTP_200_OK,
     summary="Partially update a collection",
 )
-@router.put(
-    "/update/{collection_id}",
-    response_model=CollectionResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Partially update a collection",
-)
 async def update_collection(
     collection_id: str,
     payload: CollectionUpdate,
@@ -201,11 +183,6 @@ async def update_collection(
 
 @router.delete(
     "/{collection_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a collection and uncategorise linked ideas",
-)
-@router.delete(
-    "/delete/{collection_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a collection and uncategorise linked ideas",
 )
