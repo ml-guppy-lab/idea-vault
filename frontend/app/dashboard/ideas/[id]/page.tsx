@@ -76,6 +76,7 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
   const [apiErr, setApiErr]   = useState("");
   const [collections, setCollections] = useState<Collection[]>([]);
   const [updatingCollection, setUpdatingCollection] = useState(false);
+  const [deletingImage, setDeletingImage] = useState(false);
 
   const { register, handleSubmit, control, setValue, watch, reset, formState: { errors } } =
     useForm<FormData>({ resolver: zodResolver(schema), defaultValues: { status: "Raw", priority: "Medium", tags: [], collectionId: "none" } });
@@ -170,6 +171,27 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
     }
   }
 
+  async function onDeleteImage() {
+    if (!idea?.imageUrl) return;
+    setDeletingImage(true);
+    setApiErr("");
+    try {
+      const res = await fetch(`/api/ideas/${idea.id}/image`, {
+        method: "DELETE",
+      });
+      if (res.status !== 204) {
+        const err = await res.json().catch(() => ({ detail: "Failed to delete image" })) as { detail?: string };
+        throw new Error(err.detail ?? "Failed to delete image");
+      }
+      setIdea((prev) => (prev ? { ...prev, imageUrl: undefined } : prev));
+      setPreview(null);
+    } catch (err: unknown) {
+      setApiErr(err instanceof Error ? err.message : "Failed to delete image");
+    } finally {
+      setDeletingImage(false);
+    }
+  }
+
   const tags = watch("tags") ?? [];
 
   // ── Loading skeleton ──
@@ -247,7 +269,54 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
             )}
 
             {/* Image */}
-            {idea.imageUrl && <img src={idea.imageUrl} alt="idea" style={{ width: "100%", maxHeight: 350, objectFit: "cover", borderRadius: 18, margin: "1rem 0", border: "2px solid rgba(125,211,252,0.5)", boxShadow: "0 8px 24px rgba(0,0,0,0.15)" }} className="dark:[border-color:rgba(56,189,248,0.4)]" />}
+            {idea.imageUrl && (
+              <div style={{ position: "relative", display: "inline-block", width: "100%", margin: "1rem 0" }}>
+                <img 
+                  src={idea.imageUrl} 
+                  alt="idea" 
+                  style={{ width: "100%", maxHeight: 350, objectFit: "cover", borderRadius: 18, border: "2px solid rgba(125,211,252,0.5)", boxShadow: "0 8px 24px rgba(0,0,0,0.15)", display: "block" }} 
+                  className="dark:[border-color:rgba(56,189,248,0.4)]" 
+                />
+                <button
+                  onClick={() => void onDeleteImage()}
+                  disabled={deletingImage}
+                  style={{
+                    position: "absolute",
+                    top: 8,
+                    right: 8,
+                    width: 32,
+                    height: 32,
+                    borderRadius: "50%",
+                    border: "none",
+                    background: "rgba(239, 68, 68, 0.9)",
+                    color: "#fff",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: deletingImage ? "not-allowed" : "pointer",
+                    opacity: deletingImage ? 0.6 : 1,
+                    transition: "all 0.2s ease",
+                    boxShadow: "0 4px 12px rgba(239, 68, 68, 0.4)",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!deletingImage) {
+                      (e.currentTarget as HTMLButtonElement).style.background = "rgba(239, 68, 68, 1)";
+                      (e.currentTarget as HTMLButtonElement).style.transform = "scale(1.1)";
+                      (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 6px 16px rgba(239, 68, 68, 0.5)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.background = "rgba(239, 68, 68, 0.9)";
+                    (e.currentTarget as HTMLButtonElement).style.transform = "scale(1)";
+                    (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 4px 12px rgba(239, 68, 68, 0.4)";
+                  }}
+                  title="Delete image"
+                  aria-label="Delete image"
+                >
+                  {deletingImage ? <span style={{ fontSize: "12px" }}>…</span> : <span style={{ fontSize: "18px" }}>✕</span>}
+                </button>
+              </div>
+            )}
 
             {/* Summary */}
             {idea.summary && (
@@ -379,7 +448,55 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
                 setImageFile(f); // store for upload on save
                 const r = new FileReader(); r.onload = () => setPreview(r.result as string); r.readAsDataURL(f);
               }} />
-              {preview && <img src={preview} alt="preview" style={{ maxHeight: 180, width: "100%", objectFit: "cover", borderRadius: 14, boxShadow: "0 4px 16px rgba(0,0,0,0.15)" }} />}
+              {preview && (
+                <div style={{ position: "relative", display: "inline-block", width: "100%" }}>
+                  <img 
+                    src={preview} 
+                    alt="preview" 
+                    style={{ maxHeight: 180, width: "100%", objectFit: "cover", borderRadius: 14, boxShadow: "0 4px 16px rgba(0,0,0,0.15)", display: "block" }} 
+                  />
+                  <button
+                    onClick={() => {
+                      setPreview(null);
+                      setImageFile(null);
+                      const input = document.getElementById("edit-img-input") as HTMLInputElement;
+                      if (input) input.value = "";
+                    }}
+                    style={{
+                      position: "absolute",
+                      top: 6,
+                      right: 6,
+                      width: 28,
+                      height: 28,
+                      borderRadius: "50%",
+                      border: "none",
+                      background: "rgba(239, 68, 68, 0.9)",
+                      color: "#fff",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      transition: "all 0.2s ease",
+                      boxShadow: "0 4px 12px rgba(239, 68, 68, 0.4)",
+                      fontSize: "16px",
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.background = "rgba(239, 68, 68, 1)";
+                      (e.currentTarget as HTMLButtonElement).style.transform = "scale(1.1)";
+                      (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 6px 16px rgba(239, 68, 68, 0.5)";
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.background = "rgba(239, 68, 68, 0.9)";
+                      (e.currentTarget as HTMLButtonElement).style.transform = "scale(1)";
+                      (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 4px 12px rgba(239, 68, 68, 0.4)";
+                    }}
+                    title="Remove preview"
+                    aria-label="Remove preview"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }} className="max-[500px]:!grid-cols-1">
