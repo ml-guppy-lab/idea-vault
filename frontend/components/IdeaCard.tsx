@@ -26,11 +26,11 @@ const GRADIENTS_LIGHT = [
 ];
 
 const GRADIENTS_DARK = [
-  "linear-gradient(135deg,#B980F0,#38bdf8,#FF6B6B)",
-  "linear-gradient(135deg,#FFE66D,#ff8c6b,#B980F0)",
-  "linear-gradient(135deg,#4ECDC4,#8b7cf0,#FFE66D)",
-  "linear-gradient(135deg,#1A535C,#38bdf8,#FF6B6B)",
-  "linear-gradient(135deg,#B980F0,#ff6b8a,#4ECDC4)",
+  "linear-gradient(135deg,#0ea5e9,#0284c7,#06b6d4)",
+  "linear-gradient(135deg,#22d3ee,#0ea5e9,#06b6d4)",
+  "linear-gradient(135deg,#06b6d4,#38bdf8,#0ea5e9)",
+  "linear-gradient(135deg,#0ea5e9,#0284c7,#38bdf8)",
+  "linear-gradient(135deg,#38bdf8,#0284c7,#06b6d4)",
 ];
 
 const STATUS_STYLES: Record<string, { bg: string; color: string; label: string }> = {
@@ -68,10 +68,10 @@ export default function IdeaCard({
         style={{
           borderRadius: 22,
           overflow: "hidden",
-          border: `1px solid ${hovered ? "rgba(143,211,244,0.5)" : "rgba(255,255,255,0.7)"}`,
+          border: `1px solid ${hovered ? "rgba(56,189,248,0.5)" : "rgba(125,211,252,0.4)"}`,
           boxShadow: hovered
-            ? "0 24px 44px -12px rgba(0,0,0,0.2), 0 0 0 2px rgba(143,211,244,0.3)"
-            : "0 12px 32px rgba(80,120,140,0.12)",
+            ? "0 24px 44px -12px rgba(14,165,233,0.2), 0 0 0 2px rgba(56,189,248,0.3)"
+            : "0 12px 32px rgba(14,165,233,0.12)",
           cursor: "pointer",
           position: "relative",
           transform: hovered ? "translateY(-8px)" : "translateY(0)",
@@ -79,7 +79,7 @@ export default function IdeaCard({
         }}
         className="
           [background:rgba(255,255,255,0.75)] [backdrop-filter:blur(14px)]
-          dark:[background:rgba(20,28,45,0.7)] dark:[border-color:rgba(180,160,240,0.25)]
+          dark:[background:var(--card)] dark:[border-color:rgba(56,189,248,0.25)]
         "
       >
         {/* Gradient top strip */}

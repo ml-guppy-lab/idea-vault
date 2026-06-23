@@ -55,9 +55,9 @@ type IdeaForm = z.infer<typeof ideaSchema>;
 
 const inputBase: React.CSSProperties = {
   width: "100%", padding: "0.8rem 1.1rem", borderRadius: 16,
-  border: "2px solid rgba(170,200,215,0.5)", background: "rgba(255,255,255,0.6)",
+  border: "2px solid rgba(125,211,252,0.5)", background: "rgba(255,255,255,0.6)",
   backdropFilter: "blur(8px)", fontSize: "0.9rem", outline: "none",
-  boxSizing: "border-box", fontFamily: "inherit",
+  boxSizing: "border-box", fontFamily: "inherit", color: "#0f2f47",
 };
 
 // ── Field wrapper ─────────────────────────────────────────────────────────────
@@ -65,9 +65,9 @@ const inputBase: React.CSSProperties = {
 function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-      <label style={{ fontSize: "0.85rem", fontWeight: 600, color: "#3d6678" }}>{label}</label>
+      <label style={{ fontSize: "0.85rem", fontWeight: 600, color: "#3d6678" }} className="dark:text-[#96b5cb]">{label}</label>
       {children}
-      {error && <span style={{ fontSize: "0.75rem", color: "#FF6B6B" }}>{error}</span>}
+      {error && <span style={{ fontSize: "0.75rem", color: "#ef4444" }}>{error}</span>}
     </div>
   );
 }
@@ -169,12 +169,15 @@ export default function NewIdeaPage() {
       <Link href="/dashboard" style={{ textDecoration: "none" }}>
         <span style={{
           display: "inline-flex", alignItems: "center", gap: "0.4rem",
-          fontSize: "0.9rem", fontWeight: 500, color: "#6b8fa0",
-          padding: "0.5rem 1rem", borderRadius: 50,
-          background: "rgba(255,255,255,0.75)", border: "1px solid rgba(170,200,215,0.5)",
-          boxShadow: "0 4px 12px rgba(80,120,140,0.08)", cursor: "pointer",
+          fontSize: "0.9rem", fontWeight: 600, color: "#ffffff",
+          padding: "0.65rem 1.2rem", borderRadius: 50,
+          background: "linear-gradient(135deg,#0ea5e9,#0284c7)",
+          boxShadow: "0 8px 20px rgba(14,165,233,0.2)", cursor: "pointer",
           transition: "all 0.2s ease",
-        }}>
+        }}
+          onMouseEnter={(e) => (e.currentTarget.style.boxShadow = "0 12px 28px rgba(14,165,233,0.3)")}
+          onMouseLeave={(e) => (e.currentTarget.style.boxShadow = "0 8px 20px rgba(14,165,233,0.2)")}
+        >
           <ArrowLeft size={15} /> Back to Vault
         </span>
       </Link>
@@ -184,17 +187,16 @@ export default function NewIdeaPage() {
         marginTop: "1.5rem", borderRadius: 28, padding: "2.2rem",
         background: "rgba(255,255,255,0.75)", backdropFilter: "blur(18px)",
         border: "1px solid rgba(255,255,255,0.7)", position: "relative", overflow: "hidden",
-        boxShadow: "0 12px 32px rgba(80,120,140,0.12), 0 0 30px rgba(168,230,207,0.2)",
-      }} className="dark:[background:rgba(20,28,45,0.7)!important] dark:[border-color:rgba(180,160,240,0.25)!important] max-[500px]:!p-6">
+        boxShadow: "0 12px 32px rgba(14,165,233,0.12)",
+      }} className="dark:[background:var(--card)] dark:[border-color:hsl(222_47%_15%)] max-[500px]:!p-6">
 
         {/* Gradient top strip */}
         <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 5,
-          background: "linear-gradient(135deg,#A8E6CF,#7ecbf0,#C7CEEA)" }}
-          className="dark:[background:linear-gradient(135deg,#B980F0,#38bdf8,#FF6B6B)!important]" />
+          background: "linear-gradient(135deg,#0ea5e9,#0284c7)" }} />
 
         {/* Heading */}
-        <h1 style={{ fontSize: "1.4rem", fontWeight: 700, marginBottom: "1.8rem", marginTop: "0.5rem" }}
-          className="logo-text">
+        <h1 style={{ fontSize: "1.4rem", fontWeight: 700, marginBottom: "1.8rem", marginTop: "0.5rem", color: "#0f2f47" }}
+          className="dark:text-[#f8f9ff]">
           ✨ New Idea
         </h1>
 
@@ -203,7 +205,7 @@ export default function NewIdeaPage() {
           {/* Title */}
           <Field label="Title *" error={errors.title?.message}>
             <input {...register("title")} placeholder="Give your idea a memorable name..."
-              style={inputBase} className="[color:#1a3a44] dark:[color:#e8eef8] focus:[border-color:#8FD3F4] focus:[box-shadow:0_0_0_4px_rgba(143,211,244,0.2)]" />
+              style={inputBase} className="[color:#0f2f47] dark:[color:#f8f9ff] dark:[background:rgba(26,35,50,0.8)] dark:[border-color:rgba(56,189,248,0.4)] focus:dark:[border-color:#38bdf8]" />
           </Field>
 
           {/* Summary — embedded for RAG/semantic search */}
@@ -221,18 +223,18 @@ export default function NewIdeaPage() {
                     placeholder={`Distil your idea into a clear, focused summary — max ${SUMMARY_MAX_WORDS} words. This is what the AI reads to find your idea.`}
                     rows={3}
                     style={{ ...inputBase, minHeight: 90, resize: "vertical" }}
-                    className="[color:#1a3a44] dark:[color:#e8eef8] focus:[border-color:#8FD3F4] focus:[box-shadow:0_0_0_4px_rgba(143,211,244,0.2)]"
+                    className="[color:#0f2f47] dark:[color:#f8f9ff] dark:[background:rgba(26,35,50,0.8)] dark:[border-color:rgba(56,189,248,0.4)] focus:dark:[border-color:#38bdf8]"
                   />
                   {/* Word counter */}
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: "0.7rem", color: atLimit ? "#FF6B6B" : "#6b8fa0" }}>
+                    <span style={{ fontSize: "0.7rem", color: atLimit ? "#ef4444" : "#6b8fa0" }}>
                       {atLimit
                         ? "Word limit reached — add more detail in the description below."
                         : "Concise summary for AI-powered search"}
                     </span>
                     <span style={{
                       fontSize: "0.72rem", fontWeight: 600,
-                      color: atLimit ? "#FF6B6B" : wordCount > 170 ? "#f5a623" : "#6b8fa0",
+                      color: atLimit ? "#ef4444" : wordCount > 170 ? "#f5a623" : "#6b8fa0",
                     }}>
                       {wordCount} / {SUMMARY_MAX_WORDS}
                     </span>
@@ -246,20 +248,20 @@ export default function NewIdeaPage() {
           <Field label="Description / Brain Dump" error={errors.description?.message}>
             <textarea {...register("description")} placeholder="Pour all your thoughts here — no filter needed..."
               rows={5} style={{ ...inputBase, minHeight: 140, resize: "vertical" }}
-              className="[color:#1a3a44] dark:[color:#e8eef8] focus:[border-color:#8FD3F4] focus:[box-shadow:0_0_0_4px_rgba(143,211,244,0.2)]" />
+              className="[color:#0f2f47] dark:[color:#f8f9ff] dark:[background:rgba(26,35,50,0.8)] dark:[border-color:rgba(56,189,248,0.4)] focus:dark:[border-color:#38bdf8]" />
           </Field>
 
           {/* Tags */}
           <Field label="Tags" error={errors.tags?.message as string | undefined}>
             <input value={tagInput} onChange={(e) => setTagInput(e.target.value)} onKeyDown={handleTagKey}
               placeholder="e.g. ai, design, side-project (comma separated)"
-              style={inputBase} className="[color:#1a3a44] dark:[color:#e8eef8] focus:[border-color:#8FD3F4] focus:[box-shadow:0_0_0_4px_rgba(143,211,244,0.2)]" />
+              style={inputBase} className="[color:#0f2f47] dark:[color:#f8f9ff] dark:[background:rgba(26,35,50,0.8)] dark:[border-color:rgba(56,189,248,0.4)] focus:dark:[border-color:#38bdf8]" />
             {tags.length > 0 && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.25rem" }}>
                 {tags.map((t, i) => (
                   <span key={i} onClick={() => setValue("tags", tags.filter((_, idx) => idx !== i))}
                     style={{ padding: "0.2rem 0.7rem", borderRadius: 50, fontSize: "0.78rem", fontWeight: 500,
-                      background: "linear-gradient(135deg,#A8E6CF,#7ecbf0)", color: "#1a3a44", cursor: "pointer" }}>
+                      background: "linear-gradient(135deg,#7dd3fc,#38bdf8,#0284c7)", color: "#ffffff", cursor: "pointer" }}>
                     {t} ×
                   </span>
                 ))}
@@ -271,12 +273,13 @@ export default function NewIdeaPage() {
           {/* Image upload */}
           <Field label="Image">
             <div onClick={() => fileRef.current?.click()} style={{
-              border: "2px dashed rgba(170,200,215,0.5)", borderRadius: 16, padding: "1.8rem",
+              border: "2px dashed rgba(125,211,252,0.5)", borderRadius: 16, padding: "1.8rem",
               textAlign: "center", cursor: "pointer", transition: "all 0.2s ease",
-            }} className="hover:[border-color:#8FD3F4] hover:[background:rgba(143,211,244,0.08)]">
-              <CloudUpload size={32} color="#6b8fa0" style={{ margin: "0 auto 0.5rem" }} />
-              <p style={{ margin: 0, fontSize: "0.85rem", fontWeight: 500, color: "#3d6678" }}>Click to upload an image</p>
-              <p style={{ margin: 0, fontSize: "0.75rem", color: "#6b8fa0" }}>or drag &amp; drop</p>
+              background: "rgba(255,255,255,0.3)",
+            }} className="hover:[border-color:#38bdf8] hover:[background:rgba(143,211,244,0.08)] dark:hover:[background:rgba(56,189,248,0.08)]">
+              <CloudUpload size={32} color="#4f7891" style={{ margin: "0 auto 0.5rem" }} />
+              <p style={{ margin: 0, fontSize: "0.85rem", fontWeight: 500, color: "#3d6678" }} className="dark:text-[#a8c8e0]">Click to upload an image</p>
+              <p style={{ margin: 0, fontSize: "0.75rem", color: "#6b8fa0" }} className="dark:text-[#7a95b8]">or drag &amp; drop</p>
             </div>
             <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleImageChange} />
             {preview && (
@@ -321,17 +324,20 @@ export default function NewIdeaPage() {
           </div>
 
           {/* API error */}
-          {apiErr && <p style={{ fontSize: "0.8rem", color: "#FF6B6B", margin: 0 }}>{apiErr}</p>}
+          {apiErr && <p style={{ fontSize: "0.8rem", color: "#ef4444", margin: 0 }}>{apiErr}</p>}
 
           {/* Submit */}
           <button type="submit" disabled={saving} style={{
             width: "100%", padding: "0.95rem", borderRadius: 50, border: "none", fontWeight: 700,
-            fontSize: "1rem", cursor: saving ? "not-allowed" : "pointer", color: "#fff",
+            fontSize: "1rem", cursor: saving ? "not-allowed" : "pointer", color: "#ffffff",
             opacity: saving ? 0.7 : 1, marginTop: "0.5rem", display: "flex", alignItems: "center",
             justifyContent: "center", gap: "0.5rem", transition: "all 0.25s ease",
-            boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
+            background: "linear-gradient(135deg,#0ea5e9,#0284c7)",
+            boxShadow: "0 8px 24px rgba(14,165,233,0.15)",
           }}
-            className="[background:linear-gradient(135deg,#3d7a8c,#1e4d5c)] dark:[background:linear-gradient(135deg,#9b7cf0,#5db8fe)] dark:[color:#0a0f1a] hover:![transform:translateY(-3px)] hover:![box-shadow:0_14px_32px_rgba(0,0,0,0.25)]">
+            onMouseEnter={(e) => !saving && ((e.currentTarget as HTMLButtonElement).style.boxShadow = "0 12px 32px rgba(14,165,233,0.3)")}
+            onMouseLeave={(e) => !saving && ((e.currentTarget as HTMLButtonElement).style.boxShadow = "0 8px 24px rgba(14,165,233,0.15)")}
+          >
             {saving ? <><Loader2 size={17} className="animate-spin" /> Saving...</> : <><Save size={17} /> Save Idea</>}
           </button>
 
@@ -340,11 +346,15 @@ export default function NewIdeaPage() {
             <Link href="/dashboard" style={{ textDecoration: "none" }}>
               <span style={{
                 display: "inline-flex", alignItems: "center", gap: "0.4rem",
-                fontSize: "0.9rem", fontWeight: 500, color: "#6b8fa0",
-                padding: "0.5rem 1.2rem", borderRadius: 50,
-                background: "rgba(255,255,255,0.75)", border: "1px solid rgba(170,200,215,0.5)",
-                boxShadow: "0 4px 12px rgba(80,120,140,0.08)", cursor: "pointer",
-              }}>Cancel</span>
+                fontSize: "0.9rem", fontWeight: 600, color: "#ffffff",
+                padding: "0.65rem 1.2rem", borderRadius: 50,
+                background: "rgba(255,255,255,0.15)", border: "2px solid rgba(125,211,252,0.4)",
+                boxShadow: "0 4px 12px rgba(14,165,233,0.08)", cursor: "pointer",
+                transition: "all 0.2s ease",
+              }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.2)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.15)")}
+              >Cancel</span>
             </Link>
           </div>
         </form>

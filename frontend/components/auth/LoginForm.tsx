@@ -22,22 +22,20 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
-  padding: "0.9rem 1.3rem",
-  borderRadius: 50,
-  border: "2px solid rgba(170, 200, 215, 0.5)",
-  background: "rgba(255, 255, 255, 0.85)",
-  backdropFilter: "blur(10px)",
-  WebkitBackdropFilter: "blur(10px)",
+  padding: "0.75rem 1rem",
+  borderRadius: "8px",
+  border: "1.5px solid #e0e7ff",
+  background: "#ffffff",
   fontSize: "0.95rem",
-  color: "#1a3a44",
+  color: "#1f2937",
   outline: "none",
   transition: "border-color 0.2s ease, box-shadow 0.2s ease",
   boxSizing: "border-box",
 };
 
 const inputFocusStyle: React.CSSProperties = {
-  borderColor: "#8FD3F4",
-  boxShadow: "0 0 0 4px rgba(143, 211, 244, 0.2)",
+  borderColor: "#0ea5e9",
+  boxShadow: "0 0 0 3px rgba(14, 165, 233, 0.1)",
 };
 
 // ── Input with inline error ───────────────────────────────────────────────────
@@ -156,48 +154,6 @@ export default function LoginForm() {
 
   return (
     <>
-      {/* ── App icon + name ─────────────────────────────────────────────── */}
-      <div style={{ textAlign: "center", marginBottom: "1.5rem" }}>
-        <svg
-          width="48"
-          height="48"
-          viewBox="0 0 48 48"
-          fill="none"
-          style={{ margin: "0 auto 0.75rem" }}
-        >
-          <defs>
-            <linearGradient id="vaultGrad-login" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stopColor="#2d5766" />
-              <stop offset="100%" stopColor="#1e404b" />
-            </linearGradient>
-          </defs>
-          <rect x="8" y="14" width="32" height="26" rx="4" stroke="url(#vaultGrad-login)" strokeWidth="2.5" fill="none" />
-          <path d="M16 14v-3a8 8 0 0 1 16 0v3" stroke="url(#vaultGrad-login)" strokeWidth="2.5" strokeLinecap="round" fill="none" />
-          <circle cx="24" cy="27" r="3.5" stroke="url(#vaultGrad-login)" strokeWidth="2" fill="none" />
-          <line x1="24" y1="30.5" x2="24" y2="34" stroke="url(#vaultGrad-login)" strokeWidth="2" strokeLinecap="round" />
-        </svg>
-
-        <h1
-          style={{
-            fontSize: "1.7rem",
-            fontWeight: 800,
-            background: "linear-gradient(135deg, #2d5766, #1e404b)",
-            WebkitBackgroundClip: "text",
-            WebkitTextFillColor: "transparent",
-            backgroundClip: "text",
-            margin: 0,
-          }}
-        >
-          Idea Vault
-        </h1>
-        <p
-          style={{ color: "#6b8fa0", fontSize: "0.88rem", marginTop: "0.3rem" }}
-          className="dark:[color:#7a8faa]"
-        >
-          Welcome back
-        </p>
-      </div>
-
       {/* ── Google button ────────────────────────────────────────────────── */}
       <GoogleButton onSignIn={handleGoogleSignIn} />
 
@@ -207,7 +163,7 @@ export default function LoginForm() {
           display: "flex",
           alignItems: "center",
           gap: "0.75rem",
-          margin: "1.25rem 0",
+          margin: "0.9rem 0",
         }}
       >
         <div style={{ flex: 1, height: 1, background: "rgba(0,0,0,0.1)" }} className="dark:[background:rgba(255,255,255,0.1)]" />
@@ -218,7 +174,7 @@ export default function LoginForm() {
       {/* ── Form ─────────────────────────────────────────────────────────── */}
       <form
         onSubmit={handleSubmit(onSubmit)}
-        style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+        style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}
         noValidate
       >
         <AuthInput
@@ -277,32 +233,29 @@ export default function LoginForm() {
           disabled={isSubmitting}
           style={{
             width: "100%",
-            background: "linear-gradient(135deg, #3d7a8c, #1e4d5c)",
+            background: "#0ea5e9",
             color: "#fff",
             border: "none",
-            borderRadius: 50,
-            padding: "0.95rem",
-            fontWeight: 700,
-            fontSize: "1rem",
+            borderRadius: "8px",
+            padding: "0.75rem",
+            fontWeight: 600,
+            fontSize: "0.95rem",
             cursor: isSubmitting ? "not-allowed" : "pointer",
-            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.15)",
-            transition: "box-shadow 0.25s ease, transform 0.25s ease",
+            transition: "background 0.2s ease",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             gap: "0.5rem",
-            opacity: isSubmitting ? 0.8 : 1,
+            opacity: isSubmitting ? 0.7 : 1,
           }}
-          className="dark:[background:linear-gradient(135deg,#9b7cf0,#5db8fe)] dark:[color:#0a0f1a]"
+          className="dark:[background:#06b6d4] dark:[color:#ffffff]"
           onMouseEnter={(e) => {
             if (!isSubmitting) {
-              (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-3px)";
-              (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 14px 32px rgba(0,0,0,0.25)";
+              (e.currentTarget as HTMLButtonElement).style.background = "#0284c7";
             }
           }}
           onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.transform = "translateY(0)";
-            (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 8px 24px rgba(0, 0, 0, 0.15)";
+            (e.currentTarget as HTMLButtonElement).style.background = "#0ea5e9";
           }}
         >
           {isSubmitting && <Loader2 size={18} className="animate-spin" />}
@@ -314,7 +267,7 @@ export default function LoginForm() {
       <p
         style={{
           textAlign: "center",
-          marginTop: "0.5rem",
+          marginTop: "0.35rem",
           fontSize: "0.8rem",
           color: "#6b8fa0",
         }}
@@ -333,7 +286,7 @@ export default function LoginForm() {
       <p
         style={{
           textAlign: "center",
-          marginTop: "0.25rem",
+          marginTop: "0.15rem",
           fontSize: "0.8rem",
           color: "#6b8fa0",
         }}

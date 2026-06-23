@@ -22,30 +22,30 @@ export default function GoogleButton({ onSignIn, disabled }: GoogleButtonProps) 
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        gap: "0.75rem",
+        gap: "0.6rem",
         background: "#fff",
         color: "#333",
-        border: "2px solid #e8e8e8",
-        borderRadius: 50,
-        padding: "0.95rem 2rem",
-        fontSize: "1rem",
+        border: "1.5px solid #e5e7eb",
+        borderRadius: 10,
+        padding: "0.72rem 1rem",
+        fontSize: "0.95rem",
         fontWeight: 600,
         cursor: disabled ? "not-allowed" : "pointer",
-        boxShadow: "0 6px 20px rgba(0, 0, 0, 0.08)",
-        transition: "box-shadow 0.25s ease, transform 0.25s ease",
+        boxShadow: "0 6px 16px rgba(15, 23, 42, 0.08)",
+        transition: "box-shadow 0.2s ease, transform 0.2s ease",
         opacity: disabled ? 0.7 : 1,
       }}
       onMouseEnter={(e) => {
         if (!disabled) {
           (e.currentTarget as HTMLButtonElement).style.boxShadow =
-            "0 12px 28px rgba(0,0,0,0.15)";
+            "0 10px 22px rgba(15,23,42,0.12)";
           (e.currentTarget as HTMLButtonElement).style.transform =
-            "translateY(-2px)";
+            "translateY(-1px)";
         }
       }}
       onMouseLeave={(e) => {
         (e.currentTarget as HTMLButtonElement).style.boxShadow =
-          "0 6px 20px rgba(0, 0, 0, 0.08)";
+          "0 6px 16px rgba(15, 23, 42, 0.08)";
         (e.currentTarget as HTMLButtonElement).style.transform = "translateY(0)";
       }}
     >

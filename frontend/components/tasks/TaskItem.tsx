@@ -24,9 +24,9 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 };
 
 const STATUS_BADGE: Record<TaskStatus, { background: string; color: string }> = {
-  todo:        { background: "rgba(170,200,215,0.2)", color: "#6b8fa0" },
+  todo:        { background: "rgba(125,211,252,0.15)", color: "#0ea5e9" },
   in_progress: { background: "rgba(255,230,109,0.2)", color: "#8a6f00" },
-  done:        { background: "rgba(168,230,207,0.2)", color: "#1b4d3e" },
+  done:        { background: "rgba(34,211,238,0.15)", color: "#0ea5e9" },
 };
 
 export default function TaskItem({ task, onStatusChange, onDelete }: TaskItemProps) {
@@ -66,8 +66,8 @@ export default function TaskItem({ task, onStatusChange, onDelete }: TaskItemPro
           width: 18,
           height: 18,
           borderRadius: 5,
-          border: `2px solid ${isDone ? "#A8E6CF" : "rgba(107,143,160,0.5)"}`,
-          background: isDone ? "#A8E6CF" : "transparent",
+          border: `2px solid ${isDone ? "#0ea5e9" : "rgba(56,189,248,0.4)"}`,
+          background: isDone ? "#0ea5e9" : "transparent",
           cursor: busy ? "not-allowed" : "pointer",
           display: "flex",
           alignItems: "center",
@@ -76,7 +76,7 @@ export default function TaskItem({ task, onStatusChange, onDelete }: TaskItemPro
         }}
       >
         {isDone && (
-          <span style={{ fontSize: "0.62rem", color: "#1b4d3e", fontWeight: 800, lineHeight: 1 }}>
+          <span style={{ fontSize: "0.62rem", color: "#ffffff", fontWeight: 800, lineHeight: 1 }}>
             ✓
           </span>
         )}
@@ -91,8 +91,8 @@ export default function TaskItem({ task, onStatusChange, onDelete }: TaskItemPro
             fontWeight: 500,
             textDecoration: isDone ? "line-through" : "none",
             wordBreak: "break-word",
+            color: isDone ? "#3f5f75" : "#18384f",
           }}
-          className={isDone ? "text-slate-400" : "text-[#1a3a44] dark:text-[#e8eef8]"}
         >
           {task.title}
         </p>
@@ -104,7 +104,7 @@ export default function TaskItem({ task, onStatusChange, onDelete }: TaskItemPro
               alignItems: "center",
               gap: "0.2rem",
               fontSize: "0.7rem",
-              color: "#6b8fa0",
+              color: "#466d86",
               marginTop: "0.15rem",
             }}
           >
@@ -121,7 +121,7 @@ export default function TaskItem({ task, onStatusChange, onDelete }: TaskItemPro
             style={{
               margin: "0.25rem 0 0",
               fontSize: "0.75rem",
-              color: "#6b8fa0",
+              color: "#547990",
               fontStyle: "italic",
             }}
           >

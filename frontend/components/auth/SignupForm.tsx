@@ -50,22 +50,20 @@ type SignupFormValues = z.infer<typeof signupSchema>;
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
-  padding: "0.9rem 1.3rem",
-  borderRadius: 50,
-  border: "2px solid rgba(170, 200, 215, 0.5)",
-  background: "rgba(255, 255, 255, 0.85)",
-  backdropFilter: "blur(10px)",
-  WebkitBackdropFilter: "blur(10px)",
+  padding: "0.75rem 1rem",
+  borderRadius: "8px",
+  border: "1.5px solid #e0e7ff",
+  background: "#ffffff",
   fontSize: "0.95rem",
-  color: "#1a3a44",
+  color: "#1f2937",
   outline: "none",
   transition: "border-color 0.2s ease, box-shadow 0.2s ease",
   boxSizing: "border-box",
 };
 
 const inputFocusStyle: React.CSSProperties = {
-  borderColor: "#8FD3F4",
-  boxShadow: "0 0 0 4px rgba(143, 211, 244, 0.2)",
+  borderColor: "#0ea5e9",
+  boxShadow: "0 0 0 3px rgba(14, 165, 233, 0.1)",
 };
 
 // ── Input wrapper with inline error ──────────────────────────────────────────
@@ -251,76 +249,6 @@ export default function SignupForm() {
         </div>
       ) : (
         <>
-      {/* ── Logo icon ─────────────────────────────────────────────────────── */}
-      <div style={{ textAlign: "center", marginBottom: "0.5rem" }}>
-        <span
-          style={{
-            fontSize: "3.5rem",
-            display: "inline-block",
-            filter: "drop-shadow(0 4px 12px rgba(168, 230, 207, 0.4))",
-            // gradient fill applied via SVG trick below
-          }}
-        >
-          {/* Lucide Vault icon with gradient fill via SVG linearGradient */}
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="56"
-            height="56"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="url(#vault-gradient)"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-label="Vault icon"
-          >
-            <defs>
-              <linearGradient id="vault-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="#A8E6CF" />
-                <stop offset="50%" stopColor="#7ecbf0" />
-                <stop offset="100%" stopColor="#C7CEEA" />
-              </linearGradient>
-            </defs>
-            <rect x="3" y="3" width="18" height="18" rx="2" />
-            <circle cx="12" cy="12" r="4" />
-            <path d="M12 8v-1M12 17v-1M8 12H7M17 12h-1" />
-            <path d="m10.5 10.5-1-1M14.5 14.5l-1-1M14.5 10.5l-1 1M10.5 14.5l-1 1" />
-          </svg>
-        </span>
-      </div>
-
-      {/* ── App name ──────────────────────────────────────────────────────── */}
-      <h1
-        style={{
-          textAlign: "center",
-          fontSize: "2.2rem",
-          fontWeight: 700,
-          letterSpacing: "-0.5px",
-          marginBottom: "0.4rem",
-          background: "linear-gradient(135deg, #2d5766, #1e404b)",
-          WebkitBackgroundClip: "text",
-          WebkitTextFillColor: "transparent",
-          backgroundClip: "text",
-        }}
-        className="dark:[background:linear-gradient(135deg,#c0a0f0,#7dd3fc)] dark:[WebkitBackgroundClip:text] dark:[backgroundClip:text]"
-      >
-        Idea Vault
-      </h1>
-
-      {/* ── Tagline ───────────────────────────────────────────────────────── */}
-      <p
-        style={{
-          textAlign: "center",
-          fontSize: "1.05rem",
-          fontWeight: 400,
-          color: "#6b8fa0",
-          marginBottom: "2rem",
-        }}
-        className="dark:[color:#7a8faa]"
-      >
-        Never lose a thought again.
-      </p>
-
       {/* ── Google button ─────────────────────────────────────────────────── */}
       <GoogleButton onSignIn={handleGoogleSignIn} disabled={isSubmitting} />
 
@@ -329,7 +257,7 @@ export default function SignupForm() {
         style={{
           display: "flex",
           alignItems: "center",
-          margin: "1.8rem 0",
+          margin: "0.95rem 0",
           gap: "0",
         }}
       >
@@ -364,7 +292,7 @@ export default function SignupForm() {
       <form
         onSubmit={handleSubmit(onSubmit)}
         noValidate
-        style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+        style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}
       >
         <AuthInput
           type="email"
@@ -407,36 +335,31 @@ export default function SignupForm() {
           disabled={isSubmitting}
           style={{
             width: "100%",
-            background: "linear-gradient(135deg, #3d7a8c, #1e4d5c)",
+            background: "#0ea5e9",
             color: "#fff",
             border: "none",
-            borderRadius: 50,
-            padding: "0.95rem",
-            fontWeight: 700,
-            fontSize: "1rem",
+            borderRadius: "8px",
+            padding: "0.75rem",
+            fontWeight: 600,
+            fontSize: "0.95rem",
             cursor: isSubmitting ? "not-allowed" : "pointer",
-            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.15)",
-            transition: "box-shadow 0.25s ease, transform 0.25s ease",
+            transition: "background 0.2s ease",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             gap: "0.5rem",
-            opacity: isSubmitting ? 0.8 : 1,
+            opacity: isSubmitting ? 0.7 : 1,
           }}
-          className="dark:[background:linear-gradient(135deg,#9b7cf0,#5db8fe)] dark:[color:#0a0f1a]"
+          className="dark:[background:#06b6d4] dark:[color:#ffffff]"
           onMouseEnter={(e) => {
             if (!isSubmitting) {
-              (e.currentTarget as HTMLButtonElement).style.transform =
-                "translateY(-3px)";
-              (e.currentTarget as HTMLButtonElement).style.boxShadow =
-                "0 14px 32px rgba(0,0,0,0.25)";
+              (e.currentTarget as HTMLButtonElement).style.background =
+                "#0284c7";
             }
           }}
           onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.transform =
-              "translateY(0)";
-            (e.currentTarget as HTMLButtonElement).style.boxShadow =
-              "0 8px 24px rgba(0, 0, 0, 0.15)";
+            (e.currentTarget as HTMLButtonElement).style.background =
+              "#0ea5e9";
           }}
         >
           {isSubmitting && <Loader2 size={18} className="animate-spin" />}
@@ -448,7 +371,7 @@ export default function SignupForm() {
       <p
         style={{
           textAlign: "center",
-          marginTop: "0.5rem",
+          marginTop: "0.35rem",
           fontSize: "0.8rem",
           color: "#6b8fa0",
         }}

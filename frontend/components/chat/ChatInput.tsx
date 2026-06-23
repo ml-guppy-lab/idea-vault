@@ -67,15 +67,15 @@ export default function ChatInput({
         gap: "0.5rem",
         padding: "0.55rem 0.7rem",
         borderRadius: 18,
-        border: `2px solid ${focused ? "#8FD3F4" : "rgba(170,200,215,0.5)"}`,
+        border: `2px solid ${focused ? "#38bdf8" : "rgba(125,211,252,0.55)"}`,
         boxShadow: focused
-          ? "0 0 0 4px rgba(143,211,244,0.15), 0 4px 12px rgba(80,120,140,0.08)"
-          : "0 4px 12px rgba(80,120,140,0.08)",
+          ? "0 0 0 4px rgba(56,189,248,0.15), 0 4px 12px rgba(14,116,144,0.08)"
+          : "0 4px 12px rgba(14,116,144,0.08)",
         transition: "all 0.2s ease",
         background: "rgba(255,255,255,0.6)",
         backdropFilter: "blur(8px)",
       }}
-      className="dark:bg-[rgba(20,28,45,0.6)] dark:border-[rgba(100,120,170,0.35)]"
+      className="dark:bg-[rgba(26,35,50,0.85)] dark:border-[rgba(56,189,248,0.4)] dark:focus-within:[border-color:#38bdf8]"
     >
       <textarea
         ref={textareaRef}
@@ -99,8 +99,9 @@ export default function ChatInput({
           lineHeight: 1.5,
           padding: "0.15rem 0",
           overflowY: "hidden",
+          color: "#0f2f47",
         }}
-        className="text-[#1a3a44] dark:text-[#e8eef8] placeholder:text-[#6b8fa0] disabled:opacity-50"
+        className="dark:text-[#f8f9ff] dark:placeholder:text-[#96b5cb] placeholder:text-[#4f7891] disabled:opacity-50"
       />
 
       <button
