@@ -1,21 +1,8 @@
-/**
- * /app/(auth)/signup/page.tsx — Sign Up page
- *
- * Route: /signup
- * Layout: full-viewport gradient background, centered glass card, no navbar.
- *
- * Composed from:
- *   BackgroundOrbs  — decorative fixed radial gradients behind everything
- *   AuthCard        — glassmorphism card wrapper with gradient top strip
- *   SignupForm      — form with Zod validation + POST /auth/register call
- *
- * Dark mode: triggered by adding class="dark" to <html>. Background gradient
- * and orb colours switch automatically via Tailwind dark: variants.
- */
-
-import BackgroundOrbs from "@/components/auth/BackgroundOrbs";
-import AuthCard from "@/components/auth/AuthCard";
+import SignupMediaPanel from "@/components/auth/SignupMediaPanel";
 import SignupForm from "@/components/auth/SignupForm";
+import { Plus_Jakarta_Sans } from "next/font/google";
+
+const jakarta = Plus_Jakarta_Sans({ subsets: ["latin"], weight: ["400", "500", "600", "700"] });
 
 export const metadata = {
   title: "Sign Up — Idea Vault",
@@ -24,32 +11,27 @@ export const metadata = {
 
 export default function SignupPage() {
   return (
-    <>
-      {/* ── Full-viewport gradient background ──────────────────────────── */}
-      <div
-        style={{
-          minHeight: "100vh",
-          backgroundImage:
-            "linear-gradient(135deg, #d4f1f9 0%, #e8d5f5 30%, #fce4d6 60%, #d5f5e8 100%)",
-          backgroundAttachment: "fixed",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "2rem 1rem",
-          position: "relative",
-        }}
-        className="
-          dark:[background-image:linear-gradient(135deg,#1a1a3e_0%,#1e2a4a_30%,#1a2035_60%,#1e1a35_100%)]
-        "
-      >
-        {/* Decorative background orbs — sit at z-index 0 behind card */}
-        <BackgroundOrbs />
+    <div className="min-h-screen lg:grid lg:grid-cols-2">
+      {/* Left: Auth Section */}
+      <section className={`${jakarta.className} flex min-h-screen flex-col items-center justify-center bg-white px-4 py-8 sm:px-6 lg:px-12 dark:bg-slate-950`}>
+        <div className="w-full max-w-sm space-y-5">
+          {/* Header */}
+          <div className="space-y-2">
+            <h1 className="text-[2rem] font-semibold leading-tight text-slate-900 dark:text-white">Welcome to Idea Vault</h1>
+            <p className="text-[0.98rem] leading-snug text-slate-600 dark:text-slate-400">
+              Your AI assistant for capturing and organizing ideas
+            </p>
+          </div>
 
-        {/* Centered glass auth card */}
-        <AuthCard>
+          {/* Form */}
           <SignupForm />
-        </AuthCard>
-      </div>
-    </>
+        </div>
+      </section>
+
+      {/* Right: Media Section */}
+      <section className="hidden lg:block lg:h-screen">
+        <SignupMediaPanel imageSrc="/ui-media/homepage2.png" />
+      </section>
+    </div>
   );
 }
