@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -10,6 +10,7 @@ import { ArrowLeft, Save, Loader2, CloudUpload } from "lucide-react";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import type { Collection } from "@/types/collection";
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 
@@ -48,6 +49,7 @@ const ideaSchema = z.object({
   tags:        z.array(z.string()).optional(),
   status:      z.enum(["Raw","Exploring","Validated","Building","Shipped","Abandoned"]),
   priority:    z.enum(["Low","Medium","High"]),
+  collectionId: z.string().optional(),
 });
 type IdeaForm = z.infer<typeof ideaSchema>;
 
@@ -81,13 +83,21 @@ export default function NewIdeaPage() {
   const [tagInput, setTagInput] = useState("");
   const [preview, setPreview]   = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null); // actual File for upload
+  const [collections, setCollections] = useState<Collection[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const { register, handleSubmit, control, setValue, watch, formState: { errors } } =
     useForm<IdeaForm>({
       resolver: zodResolver(ideaSchema),
-      defaultValues: { status: "Raw", priority: "Medium", tags: [] },
+      defaultValues: { status: "Raw", priority: "Medium", tags: [], collectionId: "none" },
     });
+
+  useEffect(() => {
+    fetch("/api/collections", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((data: Collection[]) => setCollections(data))
+      .catch(() => setCollections([]));
+  }, []);
 
   // Convert comma-separated tag input → array on blur/comma
   function handleTagKey(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -149,6 +159,7 @@ export default function NewIdeaPage() {
           priority: data.priority.toLowerCase(),
           tags:     finalTags,
           ...(imageUrl ? { imageUrl } : {}), // only set if an image was uploaded
+          collectionId: data.collectionId && data.collectionId !== "none" ? data.collectionId : null,
         }),
       });
       if (!res.ok) throw new Error("Failed");
@@ -316,6 +327,24 @@ export default function NewIdeaPage() {
                   <SelectContent>
                     {["Low","Medium","High"].map((p) => (
                       <SelectItem key={p} value={p}>{p}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )} />
+            </Field>
+
+            <Field label="Collection" error={errors.collectionId?.message}>
+              <Controller name="collectionId" control={control} render={({ field }) => (
+                <Select value={field.value ?? "none"} onValueChange={field.onChange}>
+                  <SelectTrigger style={{ ...inputBase, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <SelectValue placeholder="No collection" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No collection</SelectItem>
+                    {collections.map((collection) => (
+                      <SelectItem key={collection._id} value={collection._id}>
+                        {collection.emoji} {collection.name}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

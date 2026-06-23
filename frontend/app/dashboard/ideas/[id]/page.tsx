@@ -11,10 +11,11 @@ import type { Task } from "@/types/task";
 import TaskList from "@/components/tasks/TaskList";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import type { Collection } from "@/types/collection";
 
 // ── Types & schema ────────────────────────────────────────────────────────────
 
-interface Idea { id: string; title: string; summary: string; description?: string; tags: string[]; status: string; priority: string; createdAt: string; updatedAt: string; imageUrl?: string; tasks: Task[]; }
+interface Idea { id: string; title: string; summary: string; description?: string; tags: string[]; status: string; priority: string; createdAt: string; updatedAt: string; imageUrl?: string; collectionId?: string | null; tasks: Task[]; }
 
 const SUMMARY_MAX_WORDS = 190;
 function countWords(text: string): number {
@@ -41,6 +42,7 @@ const schema = z.object({
   tags: z.array(z.string()).optional(),
   status: z.enum(["Raw","Exploring","Validated","Building","Shipped","Abandoned"]),
   priority: z.enum(["Low","Medium","High"]),
+  collectionId: z.string().optional(),
 });
 type FormData = z.infer<typeof schema>;
 
@@ -72,17 +74,26 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
   const [preview, setPreview] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null); // new file picked in edit mode
   const [apiErr, setApiErr]   = useState("");
+  const [collections, setCollections] = useState<Collection[]>([]);
+  const [updatingCollection, setUpdatingCollection] = useState(false);
 
   const { register, handleSubmit, control, setValue, watch, reset, formState: { errors } } =
-    useForm<FormData>({ resolver: zodResolver(schema), defaultValues: { status: "Raw", priority: "Medium", tags: [] } });
+    useForm<FormData>({ resolver: zodResolver(schema), defaultValues: { status: "Raw", priority: "Medium", tags: [], collectionId: "none" } });
+
+  useEffect(() => {
+    fetch("/api/collections", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((data: Collection[]) => setCollections(data))
+      .catch(() => setCollections([]));
+  }, []);
 
   useEffect(() => {
     fetch(`/api/ideas/${id}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then((d: { _id: string; title: string; summary: string; description?: string; tags: string[]; status: string; priority: string; createdAt: string; updatedAt: string; image?: string; tasks?: Task[] }) => {
-        const idea: Idea = { ...d, id: d._id, status: cap(d.status), priority: cap(d.priority), tasks: d.tasks ?? [] };
+      .then((d: { _id: string; title: string; summary: string; description?: string; tags: string[]; status: string; priority: string; createdAt: string; updatedAt: string; image?: string; imageUrl?: string; collectionId?: string | null; tasks?: Task[] }) => {
+        const idea: Idea = { ...d, id: d._id, status: cap(d.status), priority: cap(d.priority), tasks: d.tasks ?? [], collectionId: d.collectionId ?? null };
         setIdea(idea);
-        reset({ title: idea.title, summary: idea.summary, description: idea.description ?? "", tags: idea.tags, status: idea.status as FormData["status"], priority: idea.priority as FormData["priority"] });
+        reset({ title: idea.title, summary: idea.summary, description: idea.description ?? "", tags: idea.tags, status: idea.status as FormData["status"], priority: idea.priority as FormData["priority"], collectionId: idea.collectionId ?? "none" });
         if (idea.imageUrl) setPreview(idea.imageUrl); // show existing Cloudinary image
       })
       .catch(code => { if (code === 404) setNotFound(true); })
@@ -114,7 +125,7 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
 
       const res = await fetch(`/api/ideas/${id}`, {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, status: data.status.toLowerCase(), priority: data.priority.toLowerCase(), tags: finalTags, ...(imageUrl ? { imageUrl } : {}) }),
+        body: JSON.stringify({ ...data, status: data.status.toLowerCase(), priority: data.priority.toLowerCase(), tags: finalTags, ...(imageUrl ? { imageUrl } : {}), collectionId: data.collectionId && data.collectionId !== "none" ? data.collectionId : null }),
       });
       if (!res.ok) throw new Error();
       const d = await res.json();
@@ -134,6 +145,29 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
       if (!res.ok && res.status !== 204) throw new Error();
       router.push("/dashboard");
     } catch { setApiErr("Failed to delete. Please try again."); setDeleting(false); }
+  }
+
+  async function onCollectionChange(value: string) {
+    if (!idea) return;
+    setUpdatingCollection(true);
+    setApiErr("");
+    try {
+      const res = await fetch(`/api/ideas/${idea.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ collectionId: value === "none" ? null : value }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "Failed to update collection" })) as { detail?: string };
+        throw new Error(err.detail ?? "Failed to update collection");
+      }
+      const updated = await res.json() as { _id: string; collectionId?: string | null };
+      setIdea((prev) => (prev ? { ...prev, collectionId: updated.collectionId ?? null } : prev));
+    } catch (err: unknown) {
+      setApiErr(err instanceof Error ? err.message : "Failed to update collection");
+    } finally {
+      setUpdatingCollection(false);
+    }
   }
 
   const tags = watch("tags") ?? [];
@@ -186,6 +220,23 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
               <span style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}><Calendar size={14} /> Created {fmt(idea.createdAt)}</span>
               <span style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}><Flag size={14} /> Priority: {idea.priority}</span>
               <span style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}><Clock size={14} /> Updated {fmt(idea.updatedAt)}</span>
+            </div>
+
+            <div style={{ marginBottom: "0.9rem", maxWidth: 340 }}>
+              <label style={{ fontSize: "0.78rem", fontWeight: 700, color: "#4f7891", display: "block", marginBottom: "0.4rem" }}>Collection</label>
+              <Select value={idea.collectionId ?? "none"} onValueChange={(v) => void onCollectionChange(v)}>
+                <SelectTrigger style={{ ...inputBase, height: 40 }} disabled={updatingCollection}>
+                  <SelectValue placeholder="No collection" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No collection</SelectItem>
+                  {collections.map((collection) => (
+                    <SelectItem key={collection._id} value={collection._id}>
+                      {collection.emoji} {collection.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Tags */}
@@ -347,6 +398,18 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
                   <Select value={field.value} onValueChange={field.onChange}>
                     <SelectTrigger style={{ ...inputBase, display: "flex", alignItems: "center", justifyContent: "space-between" }}><SelectValue /></SelectTrigger>
                     <SelectContent>{["Low","Medium","High"].map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
+                  </Select>
+                )} />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                <label style={{ fontSize: "0.85rem", fontWeight: 600, color: "#3d6678" }}>Collection</label>
+                <Controller name="collectionId" control={control} render={({ field }) => (
+                  <Select value={field.value ?? "none"} onValueChange={field.onChange}>
+                    <SelectTrigger style={{ ...inputBase, display: "flex", alignItems: "center", justifyContent: "space-between" }}><SelectValue placeholder="No collection" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No collection</SelectItem>
+                      {collections.map((collection) => <SelectItem key={collection._id} value={collection._id}>{collection.emoji} {collection.name}</SelectItem>)}
+                    </SelectContent>
                   </Select>
                 )} />
               </div>
