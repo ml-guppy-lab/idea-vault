@@ -129,14 +129,14 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
           border: `2px solid ${searchFocused ? "#38bdf8" : "rgba(125,211,252,0.55)"}`,
           boxShadow: searchFocused ? "0 4px 12px rgba(14,116,144,0.08), 0 0 0 5px rgba(56,189,248,0.2)" : "0 4px 12px rgba(14,116,144,0.08)",
           transition: "all 0.2s ease", flex: 1,
-        }} className="bg-white/60 dark:bg-white/10 min-w-0">
-          <Search size={17} color="#4f7891" style={{ flexShrink: 0 }} />
+        }} className="bg-white/60 dark:bg-[#1a2332] min-w-0">
+          <Search size={17} color={searchFocused ? "#38bdf8" : "#4f7891"} style={{ flexShrink: 0 }} />
           <input
             value={query} onChange={(e) => setQuery(e.target.value)}
             onFocus={() => setSearchFocused(true)} onBlur={() => setSearchFocused(false)}
             placeholder="Search your vault..."
             style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: "1rem", minWidth: 0 }}
-            className="text-[#0f2f47] dark:text-[#b7d7ea] placeholder:text-[#4f7891]"
+            className="text-[#0f2f47] dark:text-[#f8f9ff] placeholder:text-[#4f7891]"
           />
         </div>
 

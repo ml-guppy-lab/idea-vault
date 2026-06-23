@@ -69,12 +69,11 @@ export default function TaskList({ ideaId, initialTasks }: TaskListProps) {
       {/* Header row */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <h3
-          style={{ margin: 0, fontSize: "1rem", fontWeight: 700 }}
-          className="text-[#1a3a44] dark:text-[#e8eef8]"
+          style={{ margin: 0, fontSize: "1rem", fontWeight: 700, color: "#123550" }}
         >
           Tasks
           {tasks.length > 0 && (
-            <span style={{ fontSize: "0.75rem", fontWeight: 500, color: "#6b8fa0", marginLeft: "0.5rem" }}>
+            <span style={{ fontSize: "0.75rem", fontWeight: 500, color: "#4e738a", marginLeft: "0.5rem" }}>
               {done}/{tasks.length} done
             </span>
           )}
@@ -109,7 +108,7 @@ export default function TaskList({ ideaId, initialTasks }: TaskListProps) {
           style={{
             height: 4,
             borderRadius: 4,
-            background: "rgba(170,200,215,0.2)",
+            background: "rgba(125,211,252,0.2)",
             overflow: "hidden",
           }}
         >
@@ -117,7 +116,7 @@ export default function TaskList({ ideaId, initialTasks }: TaskListProps) {
             style={{
               height: "100%",
               borderRadius: 4,
-              background: "linear-gradient(90deg,#A8E6CF,#7ecbf0)",
+              background: "linear-gradient(90deg,#0ea5e9,#0284c7)",
               width: `${(done / tasks.length) * 100}%`,
               transition: "width 0.3s ease",
             }}

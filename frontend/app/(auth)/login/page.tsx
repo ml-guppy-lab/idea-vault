@@ -13,7 +13,7 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-2">
       {/* Left: Auth Section */}
-      <section className={`${jakarta.className} flex min-h-screen flex-col items-center justify-center bg-white px-4 py-8 sm:px-6 lg:px-12 dark:bg-slate-950`}>
+      <section className={`${jakarta.className} flex min-h-screen flex-col items-center justify-center bg-white px-4 py-8 sm:px-6 lg:px-12 dark:bg-[#0f172a]`}>
         <div className="w-full max-w-sm space-y-5">
           {/* Header */}
           <div className="space-y-2">
