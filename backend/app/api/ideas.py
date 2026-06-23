@@ -57,6 +57,38 @@ def _serialize_idea(doc: dict) -> dict:
     return doc
 
 
+async def _validate_collection_assignment(
+    db: AsyncIOMotorDatabase,
+    user_id: str,
+    collection_id: str | None,
+) -> str | None:
+    """
+    Validate collection ownership before assigning an idea to that collection.
+
+    Security: we always scope by userId so cross-user collection IDs are rejected.
+    Returns the same value when valid, or raises a generic 400 when invalid.
+    """
+    if collection_id is None:
+        return None
+
+    try:
+        oid = ObjectId(collection_id)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid collectionId",
+        )
+
+    owned_collection = await db.collections.find_one({"_id": oid, "userId": user_id}, {"_id": 1})
+    if owned_collection is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid collectionId",
+        )
+
+    return collection_id
+
+
 @router.post(
     "/create",
     status_code=status.HTTP_201_CREATED,
@@ -83,9 +115,16 @@ async def create_idea(
     # Build the document WITHOUT the embedding — it is generated in a
     # background task after this response is returned, so the user sees
     # an instant save. The embedding field is added async moments later.
+    validated_collection_id = await _validate_collection_assignment(
+        db,
+        str(current_user.id),
+        payload.collectionId,
+    )
+
     document = {
         **payload.model_dump(),   # title, summary, description, tags, status, priority
         "userId": str(current_user.id),   # always store as string — vector search filter compares strings
+        "collectionId": validated_collection_id,
         "createdAt": now,
         "updatedAt": now,
     }
@@ -145,6 +184,12 @@ async def upload_image(
     return {"url": image_url}
 
 @router.get(
+    "",
+    status_code=status.HTTP_200_OK,
+    response_model=IdeaListResponse,
+    summary="List the logged-in user's ideas (paginated)",
+)
+@router.get(
     "/list",
     status_code=status.HTTP_200_OK,
     response_model=IdeaListResponse,
@@ -177,6 +222,10 @@ async def list_ideas(
         max_length=50,
         description="Filter by tag — returns ideas whose tags array contains this exact value",
     ),
+    collectionId: str | None = Query(
+        default=None,
+        description="Filter by collection id. Use 'none' for uncategorised ideas.",
+    ),
 
     # --- auth + db dependencies ---
     current_user: User = Depends(get_current_user),
@@ -192,6 +241,7 @@ async def list_ideas(
     - `order` accepts: asc, desc.
     - `status` filters to ideas with that exact status value (optional).
     - `tag` filters to ideas whose tags array contains that string (optional).
+    - `collectionId` filters by assigned collection id; pass `none` for uncategorised only.
     - All filters combine: ?status=raw&tag=AI returns raw ideas tagged AI.
     - Priority sorting uses a numeric weight (low=1, medium=2, high=3)
       because alphabetical order of the enum strings is incorrect.
@@ -228,6 +278,19 @@ async def list_ideas(
         # returns every document where the tags array contains "mobile".
         # No special operator ($in, $elemMatch) is needed for a single value.
         query_filter["tags"] = tag
+
+    if collectionId is not None:
+        if collectionId == "none":
+            query_filter["collectionId"] = None
+        else:
+            try:
+                ObjectId(collectionId)
+            except Exception:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid collectionId filter",
+                )
+            query_filter["collectionId"] = collectionId
 
     # --- calculate how many documents to skip for the requested page ---
     # e.g. page=2, limit=10 → skip 10 documents, return documents 11-20
@@ -513,11 +576,25 @@ async def update_idea(
     # sending {"status": "exploring"} via Swagger would also write null to
     # title, description, tags, and priority — overwriting existing data.
     # Result: only fields with a real (non-None) value are written to MongoDB.
+    raw_updates = payload.model_dump(exclude_unset=True)
+
     updates = {
         k: v
-        for k, v in payload.model_dump(exclude_unset=True).items()
+        for k, v in raw_updates.items()
         if v is not None
     }
+
+    # Allow explicit uncategorise via collectionId=null while still filtering
+    # other optional nulls to avoid accidental data loss from Swagger defaults.
+    if "collectionId" in raw_updates:
+        if raw_updates["collectionId"] is None:
+            updates["collectionId"] = None
+        else:
+            updates["collectionId"] = await _validate_collection_assignment(
+                db,
+                str(current_user.id),
+                raw_updates["collectionId"],
+            )
 
     # Re-embed in background whenever title or summary changes.
     #

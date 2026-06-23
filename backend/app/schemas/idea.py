@@ -41,6 +41,7 @@ class IdeaCreate(BaseModel):
     status: Optional[IdeaStatus] = Field(default=IdeaStatus.raw)
     priority: Optional[IdeaPriority] = Field(default=IdeaPriority.low)
     imageUrl: Optional[str] = Field(default=None)  # Cloudinary URL set after upload
+    collectionId: Optional[str] = Field(default=None, description="MongoDB ObjectId as string; null = uncategorised")
 
     @field_validator("tags")
     @classmethod
@@ -78,6 +79,7 @@ class IdeaUpdate(BaseModel):
     status: Optional[IdeaStatus] = Field(default=None)
     priority: Optional[IdeaPriority] = Field(default=None)
     imageUrl: Optional[str] = Field(default=None)  # Cloudinary URL; None = unchanged
+    collectionId: Optional[str] = Field(default=None, description="MongoDB ObjectId as string; null = uncategorised")
 
 
 # --- Response Schema (what your API sends BACK to the frontend) ---
@@ -93,6 +95,7 @@ class IdeaResponse(BaseModel):
     status: IdeaStatus
     priority: IdeaPriority
     imageUrl: Optional[str] = None  # Cloudinary HTTPS URL; absent when no image uploaded
+    collectionId: Optional[str] = None
     # Tasks embedded in this idea document — empty list for ideas with no tasks yet
     tasks: list[TaskResponse] = []
     createdAt: datetime
@@ -113,6 +116,7 @@ class IdeaInDB(BaseModel):
     status: IdeaStatus = IdeaStatus.raw
     priority: IdeaPriority = IdeaPriority.low
     imageUrl: Optional[str] = None
+    collectionId: Optional[str] = None
     # Tasks are embedded — new ideas start with an empty list
     tasks: list[TaskInDB] = []
     createdAt: datetime = Field(

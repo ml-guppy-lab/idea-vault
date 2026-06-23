@@ -10,6 +10,8 @@ async def connect_to_mongo():
     client = AsyncIOMotorClient(settings.MONGO_URI)
     db = client[settings.MONGO_DB_NAME]
     await db.ideas.create_index("userId")
+    await db.ideas.create_index([("userId", 1), ("collectionId", 1)])
+    await db.collections.create_index("userId")
 
 
 async def close_mongo_connection():
