@@ -73,12 +73,16 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
   const [tagInput, setTagInput] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null); // new file picked in edit mode
+  const [removeImageOnSave, setRemoveImageOnSave] = useState(false);
   const [apiErr, setApiErr]   = useState("");
   const [collections, setCollections] = useState<Collection[]>([]);
   const [updatingCollection, setUpdatingCollection] = useState(false);
 
+
   const { register, handleSubmit, control, setValue, watch, reset, formState: { errors } } =
     useForm<FormData>({ resolver: zodResolver(schema), defaultValues: { status: "Raw", priority: "Medium", tags: [], collectionId: "none" } });
+
+  const tags = watch("tags") ?? [];
 
   useEffect(() => {
     fetch("/api/collections", { cache: "no-store" })
@@ -95,6 +99,7 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
         setIdea(idea);
         reset({ title: idea.title, summary: idea.summary, description: idea.description ?? "", tags: idea.tags, status: idea.status as FormData["status"], priority: idea.priority as FormData["priority"], collectionId: idea.collectionId ?? "none" });
         if (idea.imageUrl) setPreview(idea.imageUrl); // show existing Cloudinary image
+        setRemoveImageOnSave(false);
       })
       .catch(code => { if (code === 404) setNotFound(true); })
       .finally(() => setLoading(false));
@@ -108,9 +113,19 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
       : (data.tags ?? []);
     setSaving(true); setApiErr("");
     try {
+      if (removeImageOnSave && idea?.imageUrl) {
+        const deleteRes = await fetch(`/api/ideas/${idea.id}/image`, {
+          method: "DELETE",
+        });
+        if (deleteRes.status !== 204) {
+          const err = await deleteRes.json().catch(() => ({ detail: "Failed to delete image" })) as { detail?: string };
+          throw new Error(err.detail ?? "Failed to delete image");
+        }
+      }
+
       // Upload new image first if the user picked one in edit mode.
       // Only fires when a new file was selected; existing imageUrl is kept otherwise.
-      let imageUrl: string | undefined = idea?.imageUrl;
+      let imageUrl: string | undefined;
       if (imageFile) {
         const formData = new FormData();
         formData.append("file", imageFile);
@@ -131,7 +146,9 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
       const d = await res.json();
       const updated: Idea = { ...d, id: d._id, status: cap(d.status), priority: cap(d.priority) };
       setIdea(updated);
+      setPreview(updated.imageUrl ?? null);
       setImageFile(null);
+      setRemoveImageOnSave(false);
       setEditing(false);
     } catch (err: unknown) {
       setApiErr(err instanceof Error ? err.message : "Failed to save. Please try again.");
@@ -170,7 +187,6 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
     }
   }
 
-  const tags = watch("tags") ?? [];
 
   // ── Loading skeleton ──
   if (loading) return (
@@ -247,7 +263,17 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
             )}
 
             {/* Image */}
-            {idea.imageUrl && <img src={idea.imageUrl} alt="idea" style={{ width: "100%", maxHeight: 350, objectFit: "cover", borderRadius: 18, margin: "1rem 0", border: "2px solid rgba(125,211,252,0.5)", boxShadow: "0 8px 24px rgba(0,0,0,0.15)" }} className="dark:[border-color:rgba(56,189,248,0.4)]" />}
+            {idea.imageUrl && (
+              <div style={{ width: "100%", margin: "1rem 0" }}>
+                <img 
+                  src={idea.imageUrl} 
+                  alt="idea" 
+                  style={{ width: "100%", maxHeight: 350, objectFit: "cover", borderRadius: 18, border: "2px solid rgba(125,211,252,0.5)", boxShadow: "0 8px 24px rgba(0,0,0,0.15)", display: "block" }} 
+                  className="dark:[border-color:rgba(56,189,248,0.4)]" 
+                />
+                
+              </div>
+            )}
 
             {/* Summary */}
             {idea.summary && (
@@ -270,6 +296,9 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
               <button onClick={() => {
                 reset({ title: idea.title, summary: idea.summary, description: idea.description ?? "", tags: idea.tags ?? [], status: idea.status as FormData["status"], priority: idea.priority as FormData["priority"] });
                 setTagInput("");
+                setImageFile(null);
+                setPreview(idea.imageUrl ?? null);
+                setRemoveImageOnSave(false);
                 setEditing(true);
               }} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.75rem 1.6rem", borderRadius: 50, border: "none", fontWeight: 600, cursor: "pointer", color: "#ffffff", background: "linear-gradient(135deg,#0ea5e9,#0284c7)", boxShadow: "0 8px 24px rgba(14,165,233,0.15)", transition: "all 0.2s ease" }}
                 onMouseEnter={(e) => {
@@ -376,10 +405,66 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
                 if (!allowed.includes(f.type)) { setApiErr("Only JPEG, PNG, WebP, and GIF images are allowed."); return; }
                 if (f.size > 5 * 1024 * 1024) { setApiErr("File too large. Maximum size is 5 MB."); return; }
                 setApiErr("");
+                setRemoveImageOnSave(false);
                 setImageFile(f); // store for upload on save
                 const r = new FileReader(); r.onload = () => setPreview(r.result as string); r.readAsDataURL(f);
               }} />
-              {preview && <img src={preview} alt="preview" style={{ maxHeight: 180, width: "100%", objectFit: "cover", borderRadius: 14, boxShadow: "0 4px 16px rgba(0,0,0,0.15)" }} />}
+              {preview && (
+                <div style={{ position: "relative", display: "inline-block", width: "100%" }}>
+                  <img 
+                    src={preview} 
+                    alt="preview" 
+                    style={{ maxHeight: 180, width: "100%", objectFit: "cover", borderRadius: 14, boxShadow: "0 4px 16px rgba(0,0,0,0.15)", display: "block" }} 
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (imageFile) {
+                        setImageFile(null);
+                        setPreview(idea?.imageUrl ?? null);
+                        setRemoveImageOnSave(false);
+                      } else {
+                        setPreview(null);
+                        setRemoveImageOnSave(Boolean(idea?.imageUrl));
+                      }
+                      const input = document.getElementById("edit-img-input") as HTMLInputElement;
+                      if (input) input.value = "";
+                    }}
+                    style={{
+                      position: "absolute",
+                      top: 6,
+                      right: 6,
+                      width: 28,
+                      height: 28,
+                      borderRadius: "50%",
+                      border: "none",
+                      background: "rgba(239, 68, 68, 0.9)",
+                      color: "#fff",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      transition: "all 0.2s ease",
+                      boxShadow: "0 4px 12px rgba(239, 68, 68, 0.4)",
+                      fontSize: "16px",
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.background = "rgba(239, 68, 68, 1)";
+                      (e.currentTarget as HTMLButtonElement).style.transform = "scale(1.1)";
+                      (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 6px 16px rgba(239, 68, 68, 0.5)";
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.background = "rgba(239, 68, 68, 0.9)";
+                      (e.currentTarget as HTMLButtonElement).style.transform = "scale(1)";
+                      (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 4px 12px rgba(239, 68, 68, 0.4)";
+                    }}
+                    title="Remove preview"
+                    aria-label="Remove preview"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }} className="max-[500px]:!grid-cols-1">
@@ -424,7 +509,7 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
               >
                 {saving ? <><Loader2 size={15} className="animate-spin" /> Saving…</> : <><Save size={15} /> Save Changes</>}
               </button>
-              <button type="button" onClick={() => { setEditing(false); setApiErr(""); }} style={{ padding: "0.75rem 1.6rem", borderRadius: 50, fontWeight: 600, cursor: "pointer", color: "#6b8fa0", background: "rgba(255,255,255,0.75)", border: "1px solid rgba(170,200,215,0.5)" }}>
+              <button type="button" onClick={() => { setEditing(false); setApiErr(""); setImageFile(null); setPreview(idea.imageUrl ?? null); setRemoveImageOnSave(false); }} style={{ padding: "0.75rem 1.6rem", borderRadius: 50, fontWeight: 600, cursor: "pointer", color: "#6b8fa0", background: "rgba(255,255,255,0.75)", border: "1px solid rgba(170,200,215,0.5)" }}>
                 Cancel
               </button>
             </div>

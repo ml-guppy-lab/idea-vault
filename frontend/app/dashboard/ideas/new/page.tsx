@@ -294,8 +294,48 @@ export default function NewIdeaPage() {
             </div>
             <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleImageChange} />
             {preview && (
-              <img src={preview} alt="preview" style={{ maxHeight: 180, width: "100%", objectFit: "cover",
-                borderRadius: 14, boxShadow: "0 4px 16px rgba(0,0,0,0.15)", marginTop: "0.5rem" }} />
+              <div style={{ position: "relative", width: "100%", marginTop: "0.5rem" }}>
+                <img src={preview} alt="preview" style={{ maxHeight: 180, width: "100%", objectFit: "cover",
+                  borderRadius: 14, boxShadow: "0 4px 16px rgba(0,0,0,0.15)", display: "block" }} />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPreview(null);
+                    setImageFile(null);
+                    if (fileRef.current) fileRef.current.value = "";
+                  }}
+                  style={{
+                    position: "absolute",
+                    top: 8,
+                    right: 8,
+                    width: 30,
+                    height: 30,
+                    borderRadius: "50%",
+                    border: "none",
+                    background: "rgba(239, 68, 68, 0.9)",
+                    color: "#fff",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    fontSize: "16px",
+                    transition: "all 0.2s ease",
+                    boxShadow: "0 4px 12px rgba(239, 68, 68, 0.4)",
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.background = "rgba(239, 68, 68, 1)";
+                    (e.currentTarget as HTMLButtonElement).style.transform = "scale(1.1)";
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.background = "rgba(239, 68, 68, 0.9)";
+                    (e.currentTarget as HTMLButtonElement).style.transform = "scale(1)";
+                  }}
+                  title="Remove image"
+                  aria-label="Remove image"
+                >
+                  ✕
+                </button>
+              </div>
             )}
           </Field>
 
@@ -375,7 +415,7 @@ export default function NewIdeaPage() {
             <Link href="/dashboard" style={{ textDecoration: "none" }}>
               <span style={{
                 display: "inline-flex", alignItems: "center", gap: "0.4rem",
-                fontSize: "0.9rem", fontWeight: 600, color: "#ffffff",
+                fontSize: "0.9rem", fontWeight: 600, color: "#1a3a44",
                 padding: "0.65rem 1.2rem", borderRadius: 50,
                 background: "rgba(255,255,255,0.15)", border: "2px solid rgba(125,211,252,0.4)",
                 boxShadow: "0 4px 12px rgba(14,165,233,0.08)", cursor: "pointer",

@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status, UploadFile, File
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from app.services.image_service import validate_and_upload_image
+from app.services.image_service import validate_and_upload_image, delete_image
 
 from app.core.security import get_current_user
 from app.db.mongodb import get_mongo_db
@@ -182,6 +182,108 @@ async def upload_image(
         user_id=str(current_user.id)
     )
     return {"url": image_url}
+
+
+@router.delete(
+    "/{idea_id}/image",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete an image from an idea",
+)
+async def delete_idea_image(
+    idea_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_mongo_db),
+) -> Response:
+    """
+    Delete (remove) an image from an idea owned by the authenticated user.
+
+    Security & validation:
+    - Only the owner can delete an image from their own idea (403 otherwise).
+    - Extracts the Cloudinary public_id from imageUrl and deletes it.
+    - Sets imageUrl to null in MongoDB.
+    - Returns 204 No Content on success.
+    - Returns 404 if the idea doesn't exist.
+    - Returns 403 if the idea belongs to a different user.
+    - Returns 400 if the idea has no image.
+    """
+    # --- convert string id → ObjectId (raises 404 if format is invalid) ---
+    oid = _parse_object_id(idea_id)
+
+    # --- fetch the document to verify ownership and check for image ---
+    doc = await db.ideas.find_one({"_id": oid})
+
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Idea not found",
+        )
+
+    # --- ownership check ---
+    if doc["userId"] != str(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to modify this idea",
+        )
+
+    # --- check that an image exists ---
+    image_url = doc.get("imageUrl")
+    if not image_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This idea has no image to delete",
+        )
+
+    # --- extract public_id from Cloudinary URL ---
+    # Cloudinary URLs can have multiple formats:
+    #   1. Standard: https://res.cloudinary.com/{cloud}/image/upload/{transformations}/{folder}/{public_id}.ext
+    #   2. Direct: https://res.cloudinary.com/{cloud}/image/upload/{public_id}.ext
+    #   3. With v param: https://res.cloudinary.com/{cloud}/v{version}/{public_id}.ext
+    public_id = None
+    try:
+        # Remove query params first
+        clean_url = image_url.split("?")[0]
+        
+        # Validate that this looks like a Cloudinary URL
+        if not ("res.cloudinary.com" in clean_url or "cloudinary.com" in clean_url):
+            # Not a Cloudinary URL — just clear it from DB without trying to delete from CDN
+            _log.warning("Image URL is not a Cloudinary URL: %s. Clearing from database only.", image_url)
+            await db.ideas.update_one({"_id": oid}, {"$set": {"imageUrl": None}})
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        
+        # Try standard /upload/ format
+        if "/upload/" in clean_url:
+            parts = clean_url.split("/upload/")
+            path_with_ext = parts[-1]
+            public_id = ".".join(path_with_ext.split(".")[:-1])
+        # Fallback: extract from any Cloudinary URL by getting the last path segment
+        elif "res.cloudinary.com" in clean_url:
+            # Extract the last path component (filename with extension)
+            path_segments = clean_url.split("/")
+            last_segment = path_segments[-1] if path_segments else ""
+            if "." in last_segment:
+                public_id = ".".join(last_segment.split(".")[:-1])
+            else:
+                public_id = last_segment
+        
+        if not public_id:
+            # Could not extract public_id, but URL looks like Cloudinary
+            _log.warning("Could not extract public_id from Cloudinary URL: %s. Clearing from database only.", image_url)
+            await db.ideas.update_one({"_id": oid}, {"$set": {"imageUrl": None}})
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except Exception as e:
+        _log.error("Failed to extract public_id from imageUrl %s: %s. Clearing from database only.", image_url, e)
+        # Clear from DB even if extraction fails — best-effort cleanup
+        await db.ideas.update_one({"_id": oid}, {"$set": {"imageUrl": None}})
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # --- delete from Cloudinary (best-effort, background) ---
+    # If Cloudinary fails, imageUrl is still cleared in MongoDB for immediate UX feedback
+    await delete_image(public_id)
+
+    # --- clear the imageUrl from the idea document ---
+    await db.ideas.update_one({"_id": oid}, {"$set": {"imageUrl": None}})
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 @router.get(
     "",
