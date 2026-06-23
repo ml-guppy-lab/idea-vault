@@ -42,7 +42,7 @@ function SkeletonGrid() {
 // ── Empty state ───────────────────────────────────────────────────────────────
 
 function EmptyState({ isDark }: { isDark: boolean }) {
-  const grad = isDark ? "linear-gradient(135deg,#c0a0f0,#7dd3fc)" : "linear-gradient(135deg,#2d5766,#1e404b)";
+  const grad = isDark ? "linear-gradient(135deg,#67e8f9,#38bdf8)" : "linear-gradient(135deg,#0ea5e9,#0284c7)";
   return (
     <div style={{
       background: "rgba(255,255,255,0.75)", backdropFilter: "blur(16px)", borderRadius: 32,
@@ -72,7 +72,7 @@ function NewIdeaButton({ fullWidth = false }: { fullWidth?: boolean }) {
         boxShadow: hov ? "0 14px 32px rgba(0,0,0,0.3)" : "0 8px 24px rgba(0,0,0,0.2)",
         transform: hov ? "translateY(-3px)" : "translateY(0)",
         transition: "all 0.25s ease",
-      }} className="[background:linear-gradient(135deg,#3d7a8c,#1e4d5c)] dark:[background:linear-gradient(135deg,#9b7cf0,#5db8fe)] dark:[color:#0a0f1a]">
+      }} className="[background:linear-gradient(135deg,#0ea5e9,#0284c7)] dark:[background:linear-gradient(135deg,#22d3ee,#0284c7)] dark:[color:#ffffff]">
         <Plus size={16} /> New Idea
       </button>
     </Link>
@@ -107,36 +107,36 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
 
       {/* Welcome header */}
       <div className="mt-6 mb-2 text-center sm:text-left">
-        <h1 className="logo-text text-2xl sm:text-3xl font-semibold m-0">
+        <h1 className="text-3xl sm:text-4xl font-bold m-0 [color:#0f2f47] dark:[color:#e6f3ff] tracking-[-0.02em] leading-tight">
           👋 Welcome back, {userName.split(" ")[0]}
         </h1>
-        <p className="text-sm sm:text-base mt-1 text-[#6b8fa0] dark:text-[#7a8faa]">
+        <p className="text-sm sm:text-base mt-1 text-[#4f7891] dark:text-[#96b5cb]">
           Your ideas are waiting. Never lose a thought again.
         </p>
       </div>
 
       {/* Controls bar */}
       <div style={{
-        background: "rgba(255,255,255,0.75)", backdropFilter: "blur(16px)",
+        background: "rgba(255,255,255,0.74)", backdropFilter: "blur(16px)",
         borderRadius: 24, padding: "1rem 1.4rem", margin: "1.2rem 0",
-        border: "1px solid rgba(255,255,255,0.7)", boxShadow: "0 12px 32px rgba(80,120,140,0.12)",
-      }} className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center justify-between gap-3 dark:bg-[rgba(20,28,45,0.7)] dark:border-[rgba(180,160,240,0.25)]">
+        border: "1px solid rgba(186,230,253,0.85)", boxShadow: "0 12px 32px rgba(56,142,191,0.12)",
+      }} className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center justify-between gap-3 dark:bg-[rgba(12,24,40,0.72)] dark:border-[rgba(125,211,252,0.24)]">
 
         {/* Search */}
         <div style={{
           display: "flex", alignItems: "center", gap: "0.5rem",
           padding: "0.6rem 1.3rem", borderRadius: 50,
-          border: `2px solid ${searchFocused ? "#8FD3F4" : "rgba(170,200,215,0.5)"}`,
-          boxShadow: searchFocused ? "0 4px 12px rgba(80,120,140,0.08), 0 0 0 5px rgba(143,211,244,0.2)" : "0 4px 12px rgba(80,120,140,0.08)",
+          border: `2px solid ${searchFocused ? "#38bdf8" : "rgba(125,211,252,0.55)"}`,
+          boxShadow: searchFocused ? "0 4px 12px rgba(14,116,144,0.08), 0 0 0 5px rgba(56,189,248,0.2)" : "0 4px 12px rgba(14,116,144,0.08)",
           transition: "all 0.2s ease", flex: 1,
         }} className="bg-white/60 dark:bg-white/10 min-w-0">
-          <Search size={17} color="#6b8fa0" style={{ flexShrink: 0 }} />
+          <Search size={17} color="#4f7891" style={{ flexShrink: 0 }} />
           <input
             value={query} onChange={(e) => setQuery(e.target.value)}
             onFocus={() => setSearchFocused(true)} onBlur={() => setSearchFocused(false)}
             placeholder="Search your vault..."
             style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: "1rem", minWidth: 0 }}
-            className="text-[#1a3a44] dark:text-[#8fafc8] placeholder:text-[#6b8fa0]"
+            className="text-[#0f2f47] dark:text-[#b7d7ea] placeholder:text-[#4f7891]"
           />
         </div>
 
@@ -147,10 +147,10 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
             return (
               <button key={f} onClick={() => setFilter(f)} style={{
                 padding: "0.5rem 1.1rem", borderRadius: 50, fontSize: "0.85rem",
-                fontWeight: active ? 600 : 500, border: active ? "2px solid transparent" : "2px solid rgba(170,200,215,0.5)",
-                background: active ? "linear-gradient(135deg,#A8E6CF,#7ecbf0,#C7CEEA)" : "rgba(255,255,255,0.6)",
-                color: "#3d6678", cursor: "pointer",
-                boxShadow: active ? "0 0 30px rgba(168,230,207,0.35)" : "0 4px 12px rgba(80,120,140,0.08)",
+                fontWeight: active ? 600 : 500, border: active ? "2px solid transparent" : "2px solid rgba(125,211,252,0.5)",
+                background: active ? "linear-gradient(135deg,#7dd3fc,#38bdf8,#0ea5e9)" : "rgba(255,255,255,0.6)",
+                color: "#24506d", cursor: "pointer",
+                boxShadow: active ? "0 0 30px rgba(56,189,248,0.35)" : "0 4px 12px rgba(14,116,144,0.08)",
                 transition: "all 0.2s ease",
               }}>
                 {f}
@@ -185,7 +185,7 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
 
       {/* Footer */}
       <div className="text-center py-8 flex items-center justify-center gap-2">
-        <div style={{ width: 20, height: 20, borderRadius: 6, background: "linear-gradient(135deg,#A8E6CF,#7ecbf0,#C7CEEA)", boxShadow: "0 2px 8px rgba(0,0,0,0.15)", flexShrink: 0 }} />
+        <div style={{ width: 20, height: 20, borderRadius: 6, background: "linear-gradient(135deg,#7dd3fc,#38bdf8,#0284c7)", boxShadow: "0 2px 8px rgba(0,0,0,0.15)", flexShrink: 0 }} />
         <span className="text-xs text-[#6b8fa0] opacity-70 font-medium">Built by The ML Guppy</span>
       </div>
     </div>
@@ -265,7 +265,7 @@ function VaultAIWidget({ isDark, userId }: { isDark: boolean; userId: string }) 
           transform: hovered ? "translateY(-3px)" : "translateY(0)",
           transition: "all 0.25s ease",
         }}
-        className="[background:linear-gradient(135deg,#3d7a8c,#1e4d5c)] dark:[background:linear-gradient(135deg,#9b7cf0,#5db8fe)] dark:[color:#0a0f1a]"
+        className="[background:linear-gradient(135deg,#0ea5e9,#0284c7)] dark:[background:linear-gradient(135deg,#22d3ee,#0284c7)] dark:[color:#ffffff]"
       >
         {open ? <X size={16} /> : <Sparkles size={16} />}
         {open ? "Close" : "Vault AI"}

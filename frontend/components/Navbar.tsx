@@ -50,6 +50,7 @@ export default function Navbar({ user }: NavbarProps) {
   const [mobileOpen,   setMobileOpen]     = useState(false);
   const [loggingOut,   setLoggingOut]     = useState(false);
   const [mounted,      setMounted]        = useState(false);
+  const [desktopNavHovered, setDesktopNavHovered] = useState(false);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -102,15 +103,17 @@ export default function Navbar({ user }: NavbarProps) {
 
   // ── Shared styles ──────────────────────────────────────────────────────────
 
-  const navbarBg   = isDark ? "rgba(16,22,38,0.8)"       : "rgba(255,255,255,0.65)";
-  const navbarBdr  = isDark ? "rgba(100,120,170,0.35)"   : "rgba(170,200,215,0.5)";
-  const navbarShad = isDark ? "0 4px 12px rgba(0,0,0,0.2)" : "0 4px 12px rgba(80,120,140,0.08)";
+  const navbarBgBase = isDark ? "rgba(10,20,34,0.7)" : "rgba(255,255,255,0.66)";
+  const navbarBgHover = isDark ? "rgba(14,30,52,0.88)" : "rgba(233,247,255,0.9)";
+  const navbarBg = desktopNavHovered ? navbarBgHover : navbarBgBase;
+  const navbarBdr  = isDark ? "rgba(125,211,252,0.28)" : "rgba(125,211,252,0.45)";
+  const navbarShad = isDark ? "0 8px 20px rgba(0,0,0,0.28)" : "0 8px 20px rgba(56,142,191,0.1)";
 
-  const linkColor       = isDark ? "#b8c8e0" : "#3d6678";
-  const linkHoverColor  = isDark ? "#e8eef8" : "#1a3a44";
-  const linkHoverBg     = "rgba(168,230,207,0.15)";
-  const linkActiveBg    = "rgba(168,230,207,0.2)";
-  const linkActiveColor = isDark ? "#e8eef8" : "#1a3a44";
+  const linkColor       = isDark ? "#b7d7ea" : "#2f5d79";
+  const linkHoverColor  = isDark ? "#f0f9ff" : "#0f2f47";
+  const linkHoverBg     = isDark ? "rgba(56,189,248,0.2)" : "rgba(56,189,248,0.16)";
+  const linkActiveBg    = isDark ? "rgba(14,165,233,0.28)" : "rgba(14,165,233,0.2)";
+  const linkActiveColor = isDark ? "#f0f9ff" : "#0f2f47";
 
   const toggleBg  = isDark ? "rgba(10,16,28,0.65)"       : "rgba(255,255,255,0.6)";
   const iconColor = isDark ? "#b8c8e0"                    : "#3d6678";
@@ -119,7 +122,7 @@ export default function Navbar({ user }: NavbarProps) {
     ? "linear-gradient(135deg,#c0a0f0,#7dd3fc)"
     : "linear-gradient(135deg,#2d5766,#1e404b)";
 
-  const taglineColor = isDark ? "#7a8faa" : "#6b8fa0";
+  const taglineColor = isDark ? "#9abdd2" : "#4f7891";
 
   // ── Nav link renderer ──────────────────────────────────────────────────────
 
@@ -129,12 +132,14 @@ export default function Navbar({ user }: NavbarProps) {
     icon: Icon,
     onClick,
     mobile = false,
+    onHoverChange,
   }: {
     href: string;
     label: string;
     icon: React.ElementType;
     onClick?: () => void;
     mobile?: boolean;
+    onHoverChange?: (hovered: boolean) => void;
   }) {
     const isActive =
       href === "/dashboard"
@@ -146,8 +151,14 @@ export default function Navbar({ user }: NavbarProps) {
       <Link
         href={href}
         onClick={onClick}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
+        onMouseEnter={() => {
+          setHovered(true);
+          onHoverChange?.(true);
+        }}
+        onMouseLeave={() => {
+          setHovered(false);
+          onHoverChange?.(false);
+        }}
         style={{
           display: "flex",
           alignItems: "center",
@@ -265,7 +276,7 @@ export default function Navbar({ user }: NavbarProps) {
   // ── Dropdown panel ─────────────────────────────────────────────────────────
 
   const dropdownBg  = isDark ? "rgba(20,28,45,0.94)"             : "rgba(255,255,255,0.92)";
-  const dropdownBdr = isDark ? "rgba(180,160,240,0.25)"          : "rgba(255,255,255,0.7)";
+  const dropdownBdr = isDark ? "rgba(125,211,252,0.24)"          : "rgba(186,230,253,0.8)";
   const dropdownShd = isDark ? "0 20px 40px rgba(0,0,0,0.5)"    : "0 20px 40px rgba(60,100,130,0.2)";
   const dividerClr  = isDark ? "rgba(100,120,170,0.35)"          : "rgba(170,200,215,0.4)";
 
@@ -289,7 +300,7 @@ export default function Navbar({ user }: NavbarProps) {
           background: navbarBg,
           backdropFilter: "blur(22px)",
           WebkitBackdropFilter: "blur(22px)",
-          borderBottom: `1px solid ${navbarBdr}`,
+          borderBottom: desktopNavHovered ? `1px solid ${navbarBdr}` : "1px solid transparent",
           boxShadow: navbarShad,
           borderRadius: "0 0 24px 24px",
           transition: "background 0.35s ease, border-color 0.35s ease, box-shadow 0.35s ease",
@@ -321,9 +332,9 @@ export default function Navbar({ user }: NavbarProps) {
         </div>
 
         {/* ── Section B: Nav links (desktop) ──────────────────────────────── */}
-        <div className="hidden md:flex items-center gap-1">
+        <div className="hidden md:flex items-center gap-1" onMouseLeave={() => setDesktopNavHovered(false)}>
           {NAV_LINKS.map((l) => (
-            <NavLink key={l.href} {...l} />
+            <NavLink key={l.href} {...l} onHoverChange={setDesktopNavHovered} />
           ))}
         </div>
 
