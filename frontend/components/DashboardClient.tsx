@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Search, Plus, Sparkles, X, Folder, FolderOpen, Trash2 } from "lucide-react";
+import { Search, Plus, Sparkles, X, Folder, FolderOpen, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import { useTheme } from "next-themes";
 import IdeaCard from "@/components/IdeaCard";
 import ChatWindow from "@/components/chat/ChatWindow";
@@ -25,6 +25,7 @@ interface Idea {
 }
 
 const FILTERS = ["All", "Raw", "Exploring", "Validated", "Building", "Shipped", "Abandoned"] as const;
+
 const COLLECTION_EMOJIS = ["💻", "🧠", "🏃", "📚", "🎯", "🎬", "✍️", "🧪", "🚀", "🎨", "📈", "🎵", "🛠️", "🧩", "🧵", "🧘", "🍳", "📷", "🏠", "💡", "🧭", "🎮", "🧾", "🗂️"];
 const COLLECTION_COLORS = ["#0ea5e9", "#2563eb", "#6366f1", "#8b5cf6", "#ec4899", "#f59e0b", "#16a34a", "#ef4444", "#0f766e", "#334155"];
 
@@ -166,6 +167,8 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
   const [collectionColor, setCollectionColor] = useState("#0ea5e9");
   const [collectionSaving, setCollectionSaving] = useState(false);
   const [collectionError, setCollectionError] = useState("");
+  const [shippedOpen, setShippedOpen] = useState(false);
+  const [abandonedOpen, setAbandonedOpen] = useState(false);
 
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
@@ -299,16 +302,19 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
     }
   }
 
-  const filteredIdeas = useMemo(() => {
+  const { activeIdeas, shippedIdeas, abandonedIdeas } = useMemo(() => {
     const bySearch = ideasState.filter(
       (i) =>
         i.title.toLowerCase().includes(query.toLowerCase()) ||
         i.description.toLowerCase().includes(query.toLowerCase()) ||
         i.tags.some((t) => t.toLowerCase().includes(query.toLowerCase())),
     );
-
-    if (filter === "All") return bySearch;
-    return bySearch.filter((i) => i.status === filter);
+    const byStatus = filter === "All" ? bySearch : bySearch.filter((i) => i.status === filter);
+    return {
+      activeIdeas:    byStatus.filter((i) => i.status !== "Shipped" && i.status !== "Abandoned"),
+      shippedIdeas:   byStatus.filter((i) => i.status === "Shipped"),
+      abandonedIdeas: byStatus.filter((i) => i.status === "Abandoned"),
+    };
   }, [ideasState, query, filter]);
 
   return (
@@ -490,24 +496,118 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
 
               {ideasLoading ? (
                 <SkeletonGrid />
-              ) : filteredIdeas.length === 0 ? (
+              ) : activeIdeas.length === 0 && shippedIdeas.length === 0 && abandonedIdeas.length === 0 ? (
                 <EmptyState isDark={isDark} />
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-5">
-                  {filteredIdeas.map((idea) => (
-                    <IdeaCard
-                      key={idea.id}
-                      id={idea.id}
-                      title={idea.title}
-                      description={idea.description}
-                      tags={idea.tags}
-                      status={idea.status}
-                      priority={idea.priority}
-                      createdAt={idea.createdAt}
-                      tasks={idea.tasks ?? []}
-                    />
-                  ))}
-                </div>
+                <>
+                  {/* ── Active ideas ─────────────────────────────────────── */}
+                  {activeIdeas.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-5">
+                      {activeIdeas.map((idea, i) => (
+                        <IdeaCard
+                          key={idea.id}
+                          id={idea.id}
+                          title={idea.title}
+                          description={idea.description}
+                          tags={idea.tags}
+                          status={idea.status}
+                          priority={idea.priority}
+                          createdAt={idea.createdAt}
+                          tasks={idea.tasks ?? []}
+                          gradientIndex={i}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  {/* ── Shipped section (collapsible) ────────────────────── */}
+                  {shippedIdeas.length > 0 && (
+                    <div className="mt-8">
+                      <button
+                        onClick={() => setShippedOpen((o) => !o)}
+                        className="w-full flex items-center gap-3 mb-5 select-none"
+                        aria-expanded={shippedOpen}
+                      >
+                        <div className="flex-1 h-px" style={{ background: isDark ? "rgba(139,92,246,0.2)" : "rgba(139,92,246,0.25)" }} />
+                        <span className={`inline-flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase px-3 py-1.5 rounded-full border transition ${
+                          isDark
+                            ? "border-[#3b2060] bg-[#130d24] text-[#a78bfa] hover:bg-[#1a1130]"
+                            : "border-[#ddd6fe] bg-white/70 text-[#7c3aed] hover:bg-[#f5f3ff]"
+                        }`}>
+                          {shippedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                          Shipped · {shippedIdeas.length}
+                        </span>
+                        <div className="flex-1 h-px" style={{ background: isDark ? "rgba(139,92,246,0.2)" : "rgba(139,92,246,0.25)" }} />
+                      </button>
+
+                      {shippedOpen && (
+                        <div
+                          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-5"
+                          style={{ opacity: 0.88 }}
+                        >
+                          {shippedIdeas.map((idea, i) => (
+                            <IdeaCard
+                              key={idea.id}
+                              id={idea.id}
+                              title={idea.title}
+                              description={idea.description}
+                              tags={idea.tags}
+                              status={idea.status}
+                              priority={idea.priority}
+                              createdAt={idea.createdAt}
+                              tasks={idea.tasks ?? []}
+                              gradientIndex={activeIdeas.length + i}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Abandoned section (collapsible) ──────────────────── */}
+                  {abandonedIdeas.length > 0 && (
+                    <div className="mt-8">
+                      <button
+                        onClick={() => setAbandonedOpen((o) => !o)}
+                        className="w-full flex items-center gap-3 mb-5 select-none"
+                        aria-expanded={abandonedOpen}
+                      >
+                        <div className="flex-1 h-px" style={{ background: isDark ? "rgba(239,68,68,0.18)" : "rgba(239,68,68,0.22)" }} />
+                        <span className={`inline-flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase px-3 py-1.5 rounded-full border transition ${
+                          isDark
+                            ? "border-[#5a1c1c] bg-[#1a0a0a] text-[#f87171] hover:bg-[#220d0d]"
+                            : "border-[#fecaca] bg-white/70 text-[#dc2626] hover:bg-[#fef2f2]"
+                        }`}>
+                          {abandonedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                          Abandoned · {abandonedIdeas.length}
+                        </span>
+                        <div className="flex-1 h-px" style={{ background: isDark ? "rgba(239,68,68,0.18)" : "rgba(239,68,68,0.22)" }} />
+                      </button>
+
+                      {abandonedOpen && (
+                        <div
+                          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-5"
+                          style={{ opacity: 0.65 }}
+                        >
+                          {abandonedIdeas.map((idea, i) => (
+                            <IdeaCard
+                              key={idea.id}
+                              id={idea.id}
+                              title={idea.title}
+                              description={idea.description}
+                              tags={idea.tags}
+                              status={idea.status}
+                              priority={idea.priority}
+                              createdAt={idea.createdAt}
+                              tasks={idea.tasks ?? []}
+                              gradientIndex={activeIdeas.length + shippedIdeas.length + i}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </section>
           </section>

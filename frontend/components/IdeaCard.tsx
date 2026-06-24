@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { Archive, CheckCircle2 } from "lucide-react";
 import type { Task } from "@/types/task";
 
 interface IdeaCardProps {
@@ -42,6 +43,16 @@ const STATUS_STYLES: Record<string, { bg: string; color: string; label: string }
   Abandoned: { bg: "#FFB7C5", color: "#6e2d3a", label: "ABANDONED" },
 };
 
+// Left border accent color per status — semantically consistent with the spec
+const STATUS_BORDER: Record<string, string> = {
+  Raw:       "#6b7280",
+  Exploring: "#3b82f6",
+  Validated: "#10b981",
+  Building:  "#f59e0b",
+  Shipped:   "#8b5cf6",
+  Abandoned: "#ef4444",
+};
+
 const PRIORITY_COLOR: Record<string, string> = {
   Low:    "#A8E6CF",
   Medium: "#FFE66D",
@@ -59,6 +70,9 @@ export default function IdeaCard({
   const idx = gradientIndex % 5;
   const st = STATUS_STYLES[status];
   const pColor = PRIORITY_COLOR[priority];
+  const borderColor = STATUS_BORDER[status] ?? "#6b7280";
+  const isAbandoned = status === "Abandoned";
+  const isShipped   = status === "Shipped";
 
   return (
     <Link href={`/dashboard/ideas/${id}`} style={{ textDecoration: "none" }}>
@@ -68,7 +82,11 @@ export default function IdeaCard({
         style={{
           borderRadius: 22,
           overflow: "hidden",
-          border: `1px solid ${hovered ? "rgba(56,189,248,0.5)" : "rgba(125,211,252,0.4)"}`,
+          // Left accent only for Shipped / Abandoned; all others use a uniform 1px border
+          borderTop:    `1px solid ${hovered ? "rgba(56,189,248,0.5)" : "rgba(125,211,252,0.4)"}`,
+          borderRight:  `1px solid ${hovered ? "rgba(56,189,248,0.5)" : "rgba(125,211,252,0.4)"}`,
+          borderBottom: `1px solid ${hovered ? "rgba(56,189,248,0.5)" : "rgba(125,211,252,0.4)"}`,
+          borderLeft:   (isShipped || isAbandoned) ? `4px solid ${borderColor}` : `1px solid ${hovered ? "rgba(56,189,248,0.5)" : "rgba(125,211,252,0.4)"}`,
           boxShadow: hovered
             ? "0 24px 44px -12px rgba(14,165,233,0.2), 0 0 0 2px rgba(56,189,248,0.3)"
             : "0 12px 32px rgba(14,165,233,0.12)",
@@ -76,6 +94,8 @@ export default function IdeaCard({
           position: "relative",
           transform: hovered ? "translateY(-8px)" : "translateY(0)",
           transition: "all 0.3s ease",
+          // Abandoned cards are visually de-emphasised
+          opacity: isAbandoned ? 0.72 : 1,
         }}
         className="
           [background:rgba(255,255,255,0.75)] [backdrop-filter:blur(14px)]
@@ -85,6 +105,20 @@ export default function IdeaCard({
         {/* Gradient top strip */}
         <div style={{ height: 5, background: GRADIENTS_LIGHT[idx] }} className="dark-strip" />
         <style>{`.dark .dark-strip { background: ${GRADIENTS_DARK[idx]} !important; }`}</style>
+
+        {/* Shipped / Abandoned status icon — top-right corner */}
+        {(isShipped || isAbandoned) && (
+          <div style={{
+            position: "absolute", top: 12, right: 12,
+            opacity: 0.55,
+            lineHeight: 1,
+          }}>
+            {isShipped
+              ? <CheckCircle2 size={17} color="#8b5cf6" strokeWidth={2} />
+              : <Archive size={16} color="#ef4444" strokeWidth={2} />
+            }
+          </div>
+        )}
 
         <div style={{ padding: "1.4rem" }} className="sm:p-[1.4rem] p-5">
           {/* Optional image */}
