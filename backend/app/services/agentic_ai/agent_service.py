@@ -174,7 +174,20 @@ async def run_agent(user_message: str, user_id: str) -> AgentResponse:
 			tool_choice="auto",
 			max_tokens=1200,
 		)
-		choice = response.choices[0]
+		choices = getattr(response, "choices", None)
+		if not choices:
+			logger.error(
+				"Agent completion returned no choices (model=%s, user_id=%s).",
+				llm_config.model,
+				user_id,
+			)
+			final_message = (
+				"I hit a temporary AI provider issue while processing that request. "
+				"Please try again."
+			)
+			break
+
+		choice = choices[0]
 
 		if choice.finish_reason == "stop":
 			# Model answered directly with text. End the loop.
@@ -267,7 +280,16 @@ async def run_agent(user_message: str, user_id: str) -> AgentResponse:
 					],
 					max_tokens=220,
 				)
-				final_message = summary.choices[0].message.content or ""
+				summary_choices = getattr(summary, "choices", None)
+				if summary_choices:
+					final_message = summary_choices[0].message.content or ""
+				else:
+					logger.warning(
+						"Agent summary completion returned no choices (model=%s, user_id=%s).",
+						llm_config.model,
+						user_id,
+					)
+					final_message = "I reviewed your request and prepared suggestions."
 				break
 
 	if not final_message:
