@@ -43,9 +43,13 @@ async function getUser(token: string) {
       headers: { Authorization: `Bearer ${token}` }, cache: "no-store",
     });
     if (!res.ok) return { name: "there", userId: "" };
-    const data = await res.json() as { id: string; email: string };
-    const username = data.email.split("@")[0];
-    const name = username.split(/[._-]/).map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+    const data = await res.json() as { id: string; email: string; display_name?: string | null };
+    // Prefer the user's display name; fall back to an email-derived name.
+    const name = data.display_name?.trim() ||
+      data.email.split("@")[0]
+        .split(/[._-]/)
+        .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(" ");
     return { name, userId: data.id };
   } catch {
     return { name: "there", userId: "" };
