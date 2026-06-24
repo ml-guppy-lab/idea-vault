@@ -312,7 +312,7 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
   }, [ideasState, query, filter]);
 
   return (
-    <div className="min-h-screen px-4 sm:px-6 py-4 md:py-8"
+    <div className="min-h-screen px-3 sm:px-5 lg:px-6 2xl:px-8 py-4 md:py-8"
       style={{
         background: isDark
           ? "radial-gradient(1200px 700px at 10% -10%, rgba(34,211,238,0.08), transparent 55%), radial-gradient(1000px 600px at 95% 0%, rgba(59,130,246,0.1), transparent 50%), linear-gradient(180deg,#050915 0%,#0a1222 100%)"
@@ -334,7 +334,7 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
         }
       `}</style>
 
-      <main className="mx-auto w-full max-w-[1600px]">
+      <main className="mx-auto w-full max-w-[1920px]">
         <div className="flex flex-col xl:flex-row gap-6 items-start">
           <aside className="w-full xl:w-[25%] xl:min-w-[280px] xl:max-w-[360px] shrink-0 xl:sticky xl:top-24">
             <div className="rounded-2xl border border-[#d3e8f3] dark:border-[#24465f] bg-[#f8fdff] dark:bg-[#0f1d31] p-4 shadow-sm">
@@ -493,7 +493,7 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
               ) : filteredIdeas.length === 0 ? (
                 <EmptyState isDark={isDark} />
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-5">
                   {filteredIdeas.map((idea) => (
                     <IdeaCard
                       key={idea.id}
