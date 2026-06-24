@@ -101,7 +101,7 @@ export default function ChatInput({
           overflowY: "hidden",
           color: "#0f2f47",
         }}
-        className="dark:text-[#f8f9ff] dark:placeholder:text-[#96b5cb] placeholder:text-[#4f7891] disabled:opacity-50"
+        className="dark:text-[#f8f9ff] dark:placeholder:text-[#4f6578] dark:placeholder:opacity-100 placeholder:text-[#4f7891] disabled:opacity-50"
       />
 
       <button
