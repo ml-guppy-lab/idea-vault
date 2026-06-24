@@ -137,6 +137,31 @@ This prevents brittle 500s from legacy/corrupt imageUrl data and keeps delete op
 
 ---
 
+## Agent Runtime Hardening (Production Bug Fix)
+
+### Bug observed
+`POST /api/agent` intermittently failed with a 500 when provider responses returned an empty or null `choices` payload.
+{ The AI agent returned "Internal Server Error" because the question did not match any of the saved ideas. }
+
+Representative failure:
+- `TypeError: 'NoneType' object is not subscriptable`
+- crash point: `response.choices[0]` in agent execution flow
+
+### Root cause
+The service assumed every successful completion call always contained at least one choice. Under transient provider/proxy edge cases, this assumption was invalid.
+
+### Fix implemented
+- Added defensive guards before indexing `response.choices` in both:
+	- main agent completion turn
+	- proposal-summary completion turn
+- Added structured logging when no choices are returned.
+- Added graceful fallback user message instead of raising unhandled exceptions.
+
+### Why this matters
+This converts a provider-side transient anomaly into a controlled degraded response, preserving API uptime and preventing user-facing 500s.
+
+---
+
 ## Pydantic Schemas Added/Updated
 
 ### New file
@@ -175,6 +200,7 @@ This keeps user-scoped lookups and collection-filtered idea queries fast and ali
 - backend/app/schemas/idea.py
 - backend/app/db/mongodb.py
 - backend/app/services/image_service.py
+- backend/app/services/agentic_ai/agent_service.py
 - backend/app/main.py
 
 ---
@@ -187,6 +213,7 @@ This keeps user-scoped lookups and collection-filtered idea queries fast and ali
 - Soft unlink logic on delete is implemented.
 - Ideas collectionId filtering is implemented.
 - Image delete endpoint is resilient to malformed stored URLs and clears DB state reliably.
+- Agent endpoint no longer crashes when LLM provider returns empty/null `choices`.
 
 ### Notes on Swagger verification
 Implementation is complete and wired for the required flow.
@@ -196,4 +223,5 @@ Manual API acceptance checklist:
 - filter ideas by collectionId and by none
 - upload image, delete image, verify imageUrl clears
 - test delete image with malformed imageUrl value and confirm 204 + cleanup
+- call `/api/agent` with normal prompts and verify graceful response even when upstream completion payload has empty/null choices
 
