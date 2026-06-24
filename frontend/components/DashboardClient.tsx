@@ -514,6 +514,11 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
         </div>
       </main>
 
+      <div style={{ textAlign: "center", padding: "1.5rem", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
+        <div style={{ width: 20, height: 20, borderRadius: 6, background: "linear-gradient(135deg,#7dd3fc,#38bdf8,#0284c7)", boxShadow: "0 2px 8px rgba(14,165,233,0.2)", flexShrink: 0 }} />
+        <span style={{ fontSize: "0.78rem", color: "#6b8fa0", opacity: 0.7, fontWeight: 500 }}>Built by The ML Guppy</span>
+      </div>
+
       {collectionModalOpen && (
         <div className="fixed inset-0 z-[90] bg-black/45 backdrop-blur-sm p-4 flex items-center justify-center">
           <div className="w-full max-w-md rounded-2xl border border-[#d3e8f3] dark:border-[#24465f] bg-white dark:bg-[#0f1d31] p-5 shadow-2xl">
