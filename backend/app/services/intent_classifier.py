@@ -111,3 +111,135 @@ async def classify_intent(query: str) -> QueryIntent:
 
     # SEMANTIC_SEARCH is the safest fallback: it will at least attempt retrieval.
     return QueryIntent.SEMANTIC_SEARCH
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Pipeline routing — read (RAG) vs write (agent)
+#
+# This is a SEPARATE, coarser classification layer that sits ABOVE QueryIntent.
+# It decides which *pipeline* a message goes to:
+#   AGENT_WRITE → the agentic-AI service (generates proposals, never auto-writes)
+#   AGENT_READ  → the existing RAG pipeline (which then runs its own QueryIntent
+#                 classification internally via decompose_and_route)
+#
+# It is kept distinct from QueryIntent on purpose: the RAG retrieval/tiering code
+# (route_query, select_tier_for_intent) only understands the four QueryIntent
+# values, so polluting that enum with write-routing would break those contracts.
+# ───────────────────────────────────────────────────────────────────────────────
+
+
+class ChatRoute(str, Enum):
+    """Top-level routing decision for the unified chat endpoint."""
+
+    AGENT_WRITE = "AGENT_WRITE"  # create / update / improve / add → agent proposals
+    AGENT_READ = "AGENT_READ"    # everything else → RAG read pipeline
+
+
+_ROUTE_SYSTEM_PROMPT = """You route a message about a user's personal idea vault to one of two pipelines.
+
+Reply with exactly one label:
+- AGENT_WRITE: the user wants to CREATE, ADD, UPDATE, EDIT, IMPROVE, REWRITE, REFINE, EXPAND, or otherwise MODIFY an idea or a task.
+- AGENT_READ: anything else — asking questions, listing, counting, searching, summarizing, or general conversation.
+
+Examples:
+- "improve my first idea" -> AGENT_WRITE
+- "rewrite the description of my fitness idea" -> AGENT_WRITE
+- "add a task to my meal-prep idea" -> AGENT_WRITE
+- "create a new idea about a budgeting app" -> AGENT_WRITE
+- "make my idea title clearer" -> AGENT_WRITE
+- "what are my ideas?" -> AGENT_READ
+- "how many ideas do I have?" -> AGENT_READ
+- "do I have any ideas about travel?" -> AGENT_READ
+- "summarize my building-stage ideas" -> AGENT_READ
+- "hello" -> AGENT_READ
+
+Respond with ONLY the label. No explanation. No punctuation. Just the label."""
+
+# High-precision fast path for unambiguous write commands. Matching here returns
+# AGENT_WRITE WITHOUT an LLM call (lower latency, zero token cost). It is kept
+# deliberately conservative — write verbs must reference the user's content
+# ("idea", "task", "it", "my", ...) so read phrasings like "ideas about
+# improving sleep" do NOT match and instead fall through to the LLM classifier.
+_WRITE_FASTPATH = re.compile(
+    r"""
+    (^\s*(please\s+|can\s+you\s+|could\s+you\s+|i\s+want\s+to\s+|i'?d\s+like\s+to\s+)?
+      (improve|rewrite|revise|refine|enhance|polish|expand|shorten|reword|update|edit|modify|tweak)\b
+      [^.?!]{0,40}\b(idea|task|description|title|summary|tag|tags|it|this|that|my)\b)
+    | (\bcreate\s+(a\s+|an\s+|another\s+)?(new\s+)?(idea|task|to-?do)\b)
+    | (\badd\s+(a\s+|an\s+|another\s+)?(new\s+)?(idea|task|subtask|to-?do|step)\b)
+    | (\bmake\s+(it|this|that|my|the)\b[^.?!]{0,40}\b(better|clearer|cleaner|shorter|longer|concise|detailed|stronger)\b)
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+async def classify_chat_route(query: str) -> ChatRoute:
+    """
+    Decide whether *query* should go to the agent (write) or RAG (read) pipeline.
+
+    Strategy
+    --------
+    1. A conservative regex fast path catches obvious write commands with no LLM
+       call at all.
+    2. Everything else is classified by the fast/small model with a focused
+       binary prompt.
+
+    Security / robustness
+    ---------------------
+    - Never accepts user_id — same contract as classify_intent.
+    - Input is stripped and hard-truncated before reaching the LLM.
+    - Any unrecognised / failed model output falls back to AGENT_READ, the
+      non-destructive path (the agent never writes without explicit approval,
+      but defaulting to read avoids surfacing spurious proposals).
+    """
+    safe_query = query.strip()[:_MAX_QUERY_CHARS]
+
+    # ── Fast path: unambiguous write command → no LLM call ────────────────────
+    if _WRITE_FASTPATH.search(safe_query):
+        return ChatRoute.AGENT_WRITE
+
+    client = AsyncOpenAI(
+        base_url=llm_config.base_url,
+        api_key=llm_config.api_key,
+        default_headers=llm_config.extra_headers,
+    )
+
+    kwargs: dict = {
+        "model": llm_config.classifier_model,
+        "messages": [
+            {"role": "system", "content": _ROUTE_SYSTEM_PROMPT},
+            {"role": "user", "content": safe_query},
+        ],
+        "max_tokens": None if llm_config.provider == LLMProvider.ollama else 10,
+        "temperature": 0,
+        "stream": False,
+    }
+    if llm_config.provider == LLMProvider.ollama:
+        kwargs["extra_body"] = {"think": False}
+
+    try:
+        response = await client.chat.completions.create(**kwargs)
+    except RateLimitError:
+        # Classifier rate-limited → default to the safe, non-destructive path.
+        logger.warning("route classifier rate-limited; defaulting to AGENT_READ")
+        return ChatRoute.AGENT_READ
+
+    # Defensive: some providers can return an empty choices list on transient
+    # errors — guard against IndexError so the endpoint never 500s here.
+    choices = getattr(response, "choices", None)
+    if not choices:
+        return ChatRoute.AGENT_READ
+
+    raw = (choices[0].message.content or "")
+    logger.debug("route classifier raw output for %r: %r", safe_query, raw)
+
+    # Strip any residual <think>...</think> blocks (defense-in-depth).
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+
+    valid_labels = "|".join(route.value for route in ChatRoute)
+    match = re.search(rf"\b({valid_labels})\b", raw.upper())
+    if match:
+        return ChatRoute(match.group(1))
+
+    # Unrecognised output → safe non-destructive default.
+    return ChatRoute.AGENT_READ
