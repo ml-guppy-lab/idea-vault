@@ -30,7 +30,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 import redis.asyncio as aioredis
 
-from app.ai.chat_pipeline import format_sse, stream_rag_sse
+from app.ai.chat_pipeline import format_sse, refusal_stream, stream_rag_sse
 from app.core.rate_limit import check_message_rate_limit
 from app.core.security import get_current_user
 from app.db.mongodb import get_mongo_db
@@ -38,7 +38,12 @@ from app.db.redis import get_redis
 from app.models.user import User
 from app.schemas.chat import ChatRequest
 from app.services.agentic_ai.agent_service import run_agent
-from app.services.intent_classifier import ChatRoute, classify_chat_route
+from app.services.intent_classifier import (
+    CODE_REFUSAL,
+    ChatRoute,
+    classify_chat_route,
+    is_code_generation_request,
+)
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 logger = logging.getLogger("app.chat")
@@ -70,6 +75,23 @@ async def unified_chat(
 
     # Reject before any LLM work — 429 is a plain JSON response.
     await check_message_rate_limit(user_id, redis)
+
+    # ── Hard guardrail (zero LLM): explicit "write code" requests ──────────────
+    # A high-precision detector catches the clearest code-generation requests
+    # and refuses them WITHOUT any classifier or generation call. Anything it
+    # does not catch is still handled by the OUT_OF_SCOPE classifier and the
+    # system-prompt guardrails downstream.
+    if is_code_generation_request(request.message):
+        logger.info("[ai] code-generation request refused (no LLM) user=%s", user_id)
+        return StreamingResponse(
+            refusal_stream(CODE_REFUSAL),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
 
     route = await classify_chat_route(request.message)
     logger.info("[ai] route=%s user=%s", route.value, user_id)

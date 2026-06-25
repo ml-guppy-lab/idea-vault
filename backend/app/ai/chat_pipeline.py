@@ -19,6 +19,7 @@ from typing import AsyncGenerator
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.ai.query_decomposer import decompose_and_route
+from app.services.intent_classifier import SCOPE_REFUSAL, QueryIntent
 from app.services.rag_service import stream_rag_response
 
 logger = logging.getLogger("app.chat")
@@ -37,6 +38,19 @@ _STATUS_MAP = {
 def format_sse(event: dict) -> str:
     """Serialise an event dict into a single SSE record."""
     return f"data: {json.dumps(event)}\n\n"
+
+
+async def refusal_stream(text: str) -> AsyncGenerator[str, None]:
+    """
+    Emit a fixed refusal as a minimal RAG-style SSE stream.
+
+    Used by the deterministic guards (e.g. code-generation requests) so a
+    refusal renders as a normal assistant message on the client — with NO LLM
+    call at all.
+    """
+    yield format_sse({"type": "mode", "content": "rag"})
+    yield format_sse({"type": "text", "content": text})
+    yield format_sse({"type": "done", "content": ""})
 
 
 async def stream_rag_sse(
@@ -63,8 +77,16 @@ async def stream_rag_sse(
         yield format_sse({"type": "error", "content": "Something went wrong. Please try again."})
         return
 
-    # Intent-specific status while the LLM generates the response.
+    # ── Hard guardrail: off-topic / general-knowledge request ──────────────────
+    # The classifier judged this message to be outside Idea Vault's scope.
+    # Return the fixed refusal and SKIP generation entirely — no tokens spent.
     dominant_intent = context.get("intent", "SEMANTIC_SEARCH")
+    if dominant_intent == QueryIntent.OUT_OF_SCOPE.value:
+        yield format_sse({"type": "text", "content": SCOPE_REFUSAL})
+        yield format_sse({"type": "done", "content": ""})
+        return
+
+    # Intent-specific status while the LLM generates the response.
     yield format_sse({"type": "status", "content": _STATUS_MAP.get(dominant_intent, "Processing...")})
 
     # ── Step 3: Stream LLM response ───────────────────────────────────────────

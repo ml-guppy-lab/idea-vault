@@ -23,6 +23,7 @@ from app.ai.handlers import handle_semantic_search
 from app.schemas.task import TaskInDB
 from app.services.agentic_ai.agent_tools import AGENT_TOOLS, PROPOSAL_TOOLS, READ_ONLY_TOOLS
 from app.services.embedding_service import generate_idea_embedding
+from app.services.intent_classifier import STRICT_GUARDRAILS
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,9 @@ IMPORTANT RULES:
 5. Be specific in your reasoning - tell the user exactly why you are proposing each change.
 6. If the user just wants to chat or ask questions (not make changes), respond with text only - do not use tools.
 
-The user's ideas will be provided to you via the search_ideas tool."""
+The user's ideas will be provided to you via the search_ideas tool.
+
+""" + STRICT_GUARDRAILS
 
 
 def _to_openai_tool_calls(tool_calls: Any) -> list[dict[str, Any]]:
