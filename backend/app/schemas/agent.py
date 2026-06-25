@@ -33,6 +33,11 @@ class IdeaUpdateProposal(BaseModel):
 	new_title: str = Field(..., min_length=1, max_length=200)
 	current_description: str | None = Field(default=None, max_length=50000)
 	new_description: str | None = Field(default=None, max_length=50000)
+	# Summary feeds the embedding/vector index, so the agent only proposes a new
+	# summary when a title/description change genuinely shifts the idea's meaning.
+	# Both are optional: a minor edit (typo/wording) leaves the summary untouched.
+	current_summary: str | None = Field(default=None, max_length=2000)
+	new_summary: str | None = Field(default=None, max_length=2000)
 	new_status: IdeaStatus | None = None
 	new_priority: IdeaPriority | None = None
 	reasoning: str = Field(..., min_length=1)

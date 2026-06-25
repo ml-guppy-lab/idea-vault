@@ -478,3 +478,244 @@ Updated files:
 4. Confirm the old `/api/chat` and `/api/agent` still respond but appear struck-through /
    marked deprecated in Swagger.
 
+---
+
+## Topic Guardrails: Keeping the Assistant On-Topic
+
+> Like the section above, this is written to be read start-to-finish by a beginner.
+> It explains the problem, every option we considered, why we rejected the tempting-but-
+> dangerous one, and exactly what we built. Go slowly — the *reasoning* matters more than
+> the code.
+
+### The problem in plain English
+
+Idea Vault's assistant is meant to talk about **one thing only: your own saved ideas and
+tasks.** But because it is powered by a general-purpose LLM, it was happy to do things it
+was never meant to do:
+
+1. **Answer general-knowledge questions** — "what is the capital of France?", "explain
+   quantum physics", "who won the World Cup in 2018?". The model just knows these, so it
+   answered them. That makes the product feel like a generic ChatGPT clone instead of a
+   focused idea companion.
+2. **Write code** — "give me Python code to reverse a number". Again, the model can do
+   this, so it did. But Idea Vault is not a coding tool.
+
+We wanted two specific behaviors instead:
+
+- Off-topic question → politely refuse with one fixed sentence:
+  *"I can only help you with your saved ideas and tasks in Idea Vault."*
+- "Write me code" request → politely refuse with a different fixed sentence:
+  *"I don't write code. I can help you think through the idea behind it though."*
+
+### The trap: the "obvious" solution is the wrong one
+
+The tempting fix is a **keyword blocklist**: keep a list of banned words/phrases like
+`"write a"`, `"javascript"`, `"who is"`, `"history of"`, `"python code"`, and if the user's
+message contains any of them, refuse.
+
+This is fast, free, and **dangerously wrong**. A blocklist looks only at the *letters* in
+the sentence, not its *meaning*. Watch how each banned phrase destroys a perfectly valid,
+on-topic request:
+
+| Banned phrase | Innocent message it would wrongly block |
+|---|---|
+| `"javascript"` | "I have an idea for a **JavaScript** learning app" |
+| `"who is"` | "**Who is** my target audience for this idea?" |
+| `"history of"` | "What's the **history of** my fitness idea?" |
+| `"write a"` | "Help me **write a** better description for my idea" |
+
+Every one of those is exactly the kind of thing the assistant *should* help with — and the
+blocklist would slam the door on all of them. This is called a **false positive**: blocking
+something that should have been allowed. For a feature whose whole job is to be helpful about
+ideas, false positives are the worst possible failure. **A guardrail that blocks real work is
+worse than no guardrail at all.**
+
+So the guiding rule for this whole feature became: **be strict about refusing off-topic and
+code requests, but never at the cost of blocking a genuine idea conversation.**
+
+### The solution: three layers, each catching what the others miss
+
+Rather than one crude filter, we built **three layers of defense**. Each layer is good at a
+different thing, and they back each other up. Think of it like airport security: a quick metal
+detector for the obvious stuff, a trained officer for judgment calls, and clear posted rules as
+the final backstop.
+
+```mermaid
+flowchart TD
+    A[User message] --> L1{Layer 1<br/>Code-request regex<br/>zero LLM cost}
+    L1 -->|clear code request| R1["Refuse: I don't write code..."]
+    L1 -->|not a clear code request| L2{Layer 2<br/>LLM intent classifier}
+    L2 -->|OUT_OF_SCOPE| R2["Refuse: I can only help with your ideas..."]
+    L2 -->|about their ideas| L3[Layer 3<br/>Strict rules baked into<br/>every system prompt]
+    L3 --> ANS[Normal helpful answer<br/>grounded in the user's ideas]
+```
+
+Let's walk through each layer and *why* it exists.
+
+### Layer 1 — A tiny, ultra-precise code detector (costs nothing)
+
+**What it is:** a single regular expression (a text-pattern matcher) that runs *before any AI
+call at all*. If it fires, we instantly return the code refusal and stop. No LLM, no latency,
+no cost. This lives in `is_code_generation_request()` in `intent_classifier.py`.
+
+**Why have it at all, if Layer 2 already catches off-topic stuff?** Two reasons:
+
+1. **Speed and cost.** "Give me Python code to reverse a number" is *obviously* a code
+   request. Spending an LLM call to figure that out is wasteful. A regex answers in
+   microseconds for free.
+2. **A hard guarantee.** Because this runs first and doesn't depend on a model behaving well,
+   it is a deterministic promise: the clearest code requests are *always* refused, even if the
+   AI were having a bad day.
+
+**The critical design choice: high precision, low recall.** Remember the false-positive trap.
+We deliberately made this regex *picky* — it would rather **miss** a code request (and let
+Layer 2 catch it) than **wrongly flag** an idea conversation. It only fires when the message is
+unmistakably asking the assistant to *produce code*. Concretely, it triggers on things like:
+
+- a "make" verb sitting right next to the word **code** — "write code", "give me python **code**"
+- a programming language glued to a code word — "python **script**", "bash **code**"
+- "**code** to / that / for ..." — "**code** to reverse a string"
+- inherently-code words — "**one-liner**", "**pseudocode**"
+- "debug / refactor **my code**"
+
+And — just as important — it is built to **stay silent** on things that merely *sound*
+technical but are really idea talk:
+
+- "do I have any **coding** ideas?" → allowed
+- "what should I **build** for my app idea?" → allowed
+- "I have an idea for a **JavaScript** learning app" → allowed
+- "I want a **script** for a short film idea" → allowed (a film script, not code!)
+
+We verified this with a test of 31 sentences: **all 15 real code requests were caught, and all
+16 innocent idea messages were let through.** Zero false positives.
+
+> **One sharp edge worth remembering** (this is the kind of bug that wastes an afternoon): the
+> regex is written in "verbose mode", where a `#` character normally starts a comment. The
+> language `c#` therefore had to be escaped as `c\#`, otherwise Python silently treats the rest
+> of the line as a comment and the pattern fails to build. Tools like `compileall` won't catch
+> this because the regex is only *built* when the code actually runs.
+
+### Layer 2 — Let a small AI use *judgment*, not keywords
+
+Layer 1 only handles code. What about "what is the capital of France?" That's not code, so
+Layer 1 ignores it — and we still need to refuse it.
+
+Here's the key insight: **the problem with the keyword blocklist was never that it used a
+computer to decide — it was that keywords can't understand meaning.** So for the harder
+"is this even about their ideas?" question, we use the thing that *can* understand meaning: an
+LLM, used as a **classifier**.
+
+The app already had a small, fast classifier (`classify_intent`) that sorts read questions into
+buckets — `CONVERSATIONAL`, `LISTING`, `SEMANTIC_SEARCH`, `COUNT`. We added one more bucket:
+**`OUT_OF_SCOPE`**. Now the classifier's job includes deciding "is this message about the
+user's own ideas, or is it something from the outside world?"
+
+Because it judges *meaning*, it can make the distinction a blocklist never could:
+
+- "do I have any **coding** ideas?" → `SEMANTIC_SEARCH` (about their ideas — answer it)
+- "what's the **history of** my fitness idea?" → `SEMANTIC_SEARCH` (about their idea — answer it)
+- "what is the **capital of France**?" → `OUT_OF_SCOPE` (outside world — refuse)
+- "explain **quantum physics**" → `OUT_OF_SCOPE` (outside world — refuse)
+
+We also fixed a subtle hole we found along the way. The old classifier description for
+`CONVERSATIONAL` literally said *"general questions not about ideas"* — which was quietly giving
+the assistant permission to answer trivia as "small talk". We tightened it: `CONVERSATIONAL` now
+means **only** greetings and chit-chat aimed at the assistant ("hi", "thanks", "what can you
+do?"). Anything from the outside world goes to `OUT_OF_SCOPE`.
+
+**What happens when a message is `OUT_OF_SCOPE`?** The pipeline short-circuits: it immediately
+sends the fixed scope refusal and **skips the expensive answer-generation step entirely.** This
+is the "intercept at the classifier level" behavior — we don't waste a big LLM call generating
+an answer we're just going to throw away. The off-topic message is stopped at the cheap front
+gate, not the expensive back room.
+
+> **A nice property for mixed messages:** if someone asks two things at once — "hi, and what's
+> the capital of France?" — the idea-related part always wins the routing, so we never
+> accidentally refuse a message that contains *some* legitimate request. Pure off-topic messages
+> are the only ones that get refused.
+
+### Layer 3 — Write the rules into the assistant's "job description"
+
+Layers 1 and 2 are gatekeepers that run *before* the main assistant. Layer 3 is different: it's a
+set of **hard rules baked into the system prompt** — the hidden instructions the LLM reads before
+every single answer. Think of it as the assistant's employment contract.
+
+We created one shared rules block (`STRICT_GUARDRAILS`) and injected it into **every** generation
+prompt — the read assistant (RAG) *and* the write assistant (the agent). In plain language, the
+rules say:
+
+1. Only ever discuss the user's own saved ideas and tasks.
+2. Never write, complete, or debug code — in any language — even if asked directly.
+3. Never answer general-knowledge questions.
+4. Discussing the *concept* behind a coding idea is fine; writing the actual code is not.
+5. If a request is off-topic, reply with exactly the scope-refusal sentence.
+6. If a request is to write code, reply with exactly the code-refusal sentence.
+
+**Why do we need this if Layers 1 and 2 already exist?** Because no gatekeeper is perfect. A
+cleverly-worded request might slip past the regex and get mislabeled by the classifier. Layer 3 is
+the **last line of defense**: even if a bad request reaches the main assistant, the assistant's own
+instructions tell it to refuse. Defense in depth means *every* layer would have to fail at once for
+a bad answer to get through — which is far less likely than any single layer failing.
+
+Notice rule 4 — it captures the most important nuance of the whole feature: **talking about a
+coding idea is encouraged; writing the code is forbidden.** "What should I build for my app idea?"
+gets a thoughtful, helpful answer. "Write the app's login function" gets refused. Same topic,
+different action.
+
+### Why three layers instead of just one?
+
+Each layer covers a different weakness of the others:
+
+| Layer | Strength | Weakness (covered by...) |
+|---|---|---|
+| 1. Regex | Instant, free, guaranteed for obvious code | Only knows code, not meaning → Layer 2 |
+| 2. LLM classifier | Understands meaning, catches all off-topic | Costs a small call; can occasionally misjudge → Layer 3 |
+| 3. System-prompt rules | Always present, final backstop | Relies on the big model obeying → Layers 1 & 2 catch most first |
+
+Crucially, **none of the three layers is the keyword blocklist we rejected.** The cheap layer
+(regex) is deliberately narrow enough to never block idea talk, and the broad decisions are made by
+*meaning-aware* AI judgment. That is the whole point: we got strictness **without** the false
+positives.
+
+### The two refusal messages (kept identical everywhere)
+
+There are exactly two fixed responses, defined once as constants and reused by all three layers so
+the wording can never drift apart:
+
+- **Off-topic:** "I can only help you with your saved ideas and tasks in Idea Vault."
+- **Code request:** "I don't write code. I can help you think through the idea behind it though."
+
+Refusals are delivered to the browser as a normal streamed assistant message, so to the user they
+look just like any other reply in the chat — no scary error popups, no broken UI.
+
+### Files changed
+
+Updated files:
+- `backend/app/services/intent_classifier.py` — added the two refusal constants
+  (`SCOPE_REFUSAL`, `CODE_REFUSAL`), the shared `STRICT_GUARDRAILS` rules block, the high-precision
+  `is_code_generation_request()` detector, and the new `OUT_OF_SCOPE` value on `QueryIntent` (with
+  a rewritten classifier prompt).
+- `backend/app/ai/query_router.py` — added an `OUT_OF_SCOPE` route that returns an empty context
+  with no database lookup.
+- `backend/app/ai/chat_pipeline.py` — short-circuits `OUT_OF_SCOPE` to the fixed scope refusal
+  (skipping answer generation) and added a small `refusal_stream()` helper.
+- `backend/app/api/ai.py` — runs the zero-cost code detector at the very top of the endpoint,
+  before any LLM call.
+- `backend/app/services/rag_service.py` — injected `STRICT_GUARDRAILS` into every read-assistant
+  system prompt and added a defensive `OUT_OF_SCOPE` prompt branch.
+- `backend/app/services/agentic_ai/agent_service.py` — appended `STRICT_GUARDRAILS` to the write
+  agent's system prompt.
+
+### How to verify it works
+
+1. Send "give me a python code to reverse a number" → expect the **code refusal**, returned
+   instantly with **no LLM call** (Layer 1).
+2. Send "do I have any coding ideas?" → expect a **normal, helpful answer** about your ideas
+   (not blocked).
+3. Send "what should I build for my coding idea?" → expect the assistant to **discuss the idea**
+   without writing any code.
+4. Send "what is the capital of France?" → expect the **scope refusal**, with the answer-generation
+   step **skipped** at the classifier level (Layer 2).
+5. Try several off-topic questions (trivia, math, science, definitions) → all should be refused
+   with the same scope-refusal sentence.
+

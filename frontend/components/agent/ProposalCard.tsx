@@ -20,6 +20,8 @@ interface IdeaUpdateProposal {
 	new_title: string;
 	current_description?: string | null;
 	new_description?: string | null;
+	current_summary?: string | null;
+	new_summary?: string | null;
 	new_status?: string | null;
 	new_priority?: string | null;
 	reasoning: string;
@@ -148,6 +150,14 @@ export function ProposalCard({
 							oldValue={proposal.current_description}
 							newValue={proposal.new_description}
 						/>
+
+						{proposal.new_summary ? (
+							<DiffView
+								label="Summary"
+								oldValue={proposal.current_summary}
+								newValue={proposal.new_summary}
+							/>
+						) : null}
 
 						{proposal.new_status ? (
 							<DiffView label="Status" oldValue={null} newValue={proposal.new_status} />

@@ -70,6 +70,16 @@ async def route_query(
             return await handle_count(user_id, db)
         case QueryIntent.SEMANTIC_SEARCH:
             return await handle_semantic_search(query, user_id, db)
+        case QueryIntent.OUT_OF_SCOPE:
+            # Off-topic / general-knowledge / code request. No DB access and no
+            # retrieval — the pipeline detects this intent and returns a fixed
+            # refusal, so the (expensive) generation model is never called.
+            return {
+                "ideas": [],
+                "intent": QueryIntent.OUT_OF_SCOPE.value,
+                "raw_query": query,
+                "count": None,
+            }
         case _:
             # Exhaustive match — should never reach here because the classifier
             # always returns a valid QueryIntent (with SEMANTIC_SEARCH as fallback).

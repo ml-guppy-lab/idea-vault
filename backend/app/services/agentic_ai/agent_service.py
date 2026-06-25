@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from bson import ObjectId
+from fastapi import BackgroundTasks
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from openai import AsyncOpenAI, RateLimitError
 
@@ -23,6 +24,7 @@ from app.ai.handlers import handle_semantic_search
 from app.schemas.task import TaskInDB
 from app.services.agentic_ai.agent_tools import AGENT_TOOLS, PROPOSAL_TOOLS, READ_ONLY_TOOLS
 from app.services.embedding_service import generate_idea_embedding
+from app.services.intent_classifier import STRICT_GUARDRAILS
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +41,11 @@ IMPORTANT RULES:
 4. Never make up idea IDs - always get them from search results.
 5. Be specific in your reasoning - tell the user exactly why you are proposing each change.
 6. If the user just wants to chat or ask questions (not make changes), respond with text only - do not use tools.
+7. When proposing title or description changes that significantly alter the meaning of an idea, also propose a new_summary that captures the updated concept in 2-3 sentences (max 190 words). The summary feeds semantic search, so it must reflect the idea's current meaning. If the changes are minor (fixing typos, small wording tweaks), leave the summary unchanged and omit new_summary.
 
-The user's ideas will be provided to you via the search_ideas tool."""
+The user's ideas will be provided to you via the search_ideas tool.
+
+""" + STRICT_GUARDRAILS
 
 
 def _to_openai_tool_calls(tool_calls: Any) -> list[dict[str, Any]]:
@@ -339,6 +344,8 @@ def _build_proposal(tool_name: str, args: dict[str, Any]) -> Proposal:
 			new_title=args["new_title"],
 			current_description=args.get("current_description"),
 			new_description=args.get("new_description"),
+			current_summary=args.get("current_summary"),
+			new_summary=args.get("new_summary"),
 			new_status=args.get("new_status"),
 			new_priority=args.get("new_priority"),
 			reasoning=args["reasoning"],
@@ -370,12 +377,17 @@ def _build_proposal(tool_name: str, args: dict[str, Any]) -> Proposal:
 	raise ValueError(f"Unknown proposal tool: {tool_name}")
 
 
-async def execute_proposal(proposal: Proposal, user_id: str) -> dict[str, Any]:
+async def execute_proposal(
+	proposal: Proposal,
+	user_id: str,
+	background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
 	"""
 	Apply an accepted proposal to MongoDB.
 
 	This is the only write path in this service and must be called only after
-	explicit user approval.
+	explicit user approval. `background_tasks` lets us re-embed updated ideas
+	after the response is sent, keeping the accept call fast.
 	"""
 	db = get_mongo_db()
 
@@ -396,6 +408,11 @@ async def execute_proposal(proposal: Proposal, user_id: str) -> dict[str, Any]:
 			updates["title"] = proposal.new_title
 		if proposal.new_description is not None:
 			updates["description"] = proposal.new_description
+		# Summary feeds the embedding/vector index. The agent only proposes a
+		# new_summary when the idea's meaning genuinely changed, so when present
+		# we persist it and re-embed below to keep semantic search accurate.
+		if proposal.new_summary is not None:
+			updates["summary"] = proposal.new_summary
 		if proposal.new_status is not None:
 			updates["status"] = proposal.new_status
 		if proposal.new_priority is not None:
@@ -404,20 +421,23 @@ async def execute_proposal(proposal: Proposal, user_id: str) -> dict[str, Any]:
 		# Apply the approved patch.
 		await db.ideas.update_one({"_id": idea_oid, "userId": user_id}, {"$set": updates})
 
-		# Keep semantic search quality by refreshing embedding on title updates.
-		if "title" in updates:
-			summary = idea.get("summary") or _summary_from_description(
-				idea.get("description") or updates["title"]
+		# Re-embed in the background when an embedded field (title or summary)
+		# actually changed. Embedding input = title + summary; description/status/
+		# priority are not embedded. Running it as a background task keeps the
+		# accept response fast — the CPU-bound encode happens after we respond.
+		title_changed = "title" in updates and updates["title"] != idea.get("title")
+		summary_changed = "summary" in updates and updates["summary"] != idea.get("summary")
+		if title_changed or summary_changed:
+			# Local import avoids a circular dependency (api.ideas imports services).
+			from app.api.ideas import _embed_and_store
+
+			final_title = updates.get("title", idea.get("title", ""))
+			final_summary = (
+				updates.get("summary")
+				or idea.get("summary")
+				or _summary_from_description(idea.get("description") or final_title)
 			)
-			if summary:
-				try:
-					embedding = await asyncio.to_thread(generate_idea_embedding, updates["title"], summary)
-					await db.ideas.update_one(
-						{"_id": idea_oid, "userId": user_id},
-						{"$set": {"embedding": embedding, "updatedAt": datetime.now(timezone.utc)}},
-					)
-				except Exception:
-					logger.exception("Failed to refresh embedding for updated idea %s", proposal.idea_id)
+			background_tasks.add_task(_embed_and_store, db, idea_oid, final_title, final_summary)
 
 		return {
 			"success": True,
