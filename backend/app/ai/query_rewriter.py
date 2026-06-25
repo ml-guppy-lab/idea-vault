@@ -36,6 +36,28 @@ _MAX_QUERY_CHARS = 200
 # Only the most recent turns are needed to resolve references; keeps tokens low.
 _MAX_HISTORY_MESSAGES = 6
 
+# Referential words that signal the message LEANS ON earlier context ("which of
+# these", "the second one", "expand on it"). Only such messages need rewriting;
+# a self-contained question ("do I have any fitness ideas?") is already a good
+# search query, so matching here is what lets us skip a wasted LLM call. The
+# pattern is deliberately inclusive: a false positive costs one cheap call, a
+# false negative costs a broken search.
+_CONTEXT_WORDS_RE = re.compile(
+    r"""\b(
+        these | those | them | they | their |
+        it | its | this | that |
+        which\s+(?:of|one|ones) |
+        the\s+(?:first|second|third|fourth|last|next|other|same|one|ones|former|latter) |
+        above | previous | earlier | aforementioned
+    )\b""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _is_context_dependent(message: str) -> bool:
+    """True when the message references earlier turns and so needs rewriting."""
+    return bool(_CONTEXT_WORDS_RE.search(message))
+
 _REWRITE_SYSTEM_PROMPT = """You rewrite the user's latest message into a single standalone search query for their personal idea database.
 
 Use the conversation so far to resolve references like "these", "it", "that one", or "the second idea" into the explicit topic they refer to.
@@ -51,10 +73,18 @@ async def rewrite_query(history: list[dict], message: str) -> str:
     """
     Rewrite *message* into a standalone search query using recent *history*.
 
-    Returns the original message unchanged when there is no history, or on any
-    error, so retrieval always has something usable.
+    Returns the original message unchanged when there is no history, when the
+    message is already self-contained (no referential words — a free regex check
+    that avoids a wasted LLM call), or on any error — so retrieval always has
+    something usable.
     """
     if not history:
+        return message
+
+    # Cheap gate: skip the LLM rewrite when the message does not lean on prior
+    # context. "do I have any fitness ideas?" is already a good query; only
+    # follow-ups like "which of these relate to weight loss?" are rewritten.
+    if not _is_context_dependent(message):
         return message
 
     recent = [
