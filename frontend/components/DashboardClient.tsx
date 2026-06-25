@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Search, Plus, Sparkles, X, Folder, FolderOpen, Trash2, ChevronDown, ChevronRight } from "lucide-react";
+import { Search, Plus, Sparkles, X, Folder, FolderOpen, Trash2, ChevronDown, ChevronRight, Menu } from "lucide-react";
 import { useTheme } from "next-themes";
 import IdeaCard from "@/components/IdeaCard";
-import ChatWindow from "@/components/chat/ChatWindow";
+import UnifiedChatWindow from "@/components/chat/UnifiedChatWindow";
 import type { Task } from "@/types/task";
 import type { Collection } from "@/types/collection";
 
@@ -146,6 +146,148 @@ function EmptyState({ isDark }: { isDark: boolean }) {
   );
 }
 
+function BrowsePanel({
+  collections,
+  collectionsLoading,
+  allIdeasCount,
+  uncategorisedCount,
+  activeCollection,
+  onSelectCollection,
+  filter,
+  onSelectStatus,
+  onNewCollection,
+  onDeleteCollection,
+  isDark,
+  showStatus = false,
+}: {
+  collections: Collection[];
+  collectionsLoading: boolean;
+  allIdeasCount: number;
+  uncategorisedCount: number;
+  activeCollection: CollectionFilter;
+  onSelectCollection: (key: CollectionFilter) => void;
+  filter: typeof FILTERS[number];
+  onSelectStatus: (f: typeof FILTERS[number]) => void;
+  onNewCollection: () => void;
+  onDeleteCollection: (id: string) => void;
+  isDark: boolean;
+  showStatus?: boolean;
+}) {
+  return (
+    <div className="rounded-2xl border border-[#d3e8f3] dark:border-[#24465f] bg-[#f8fdff] dark:bg-[#0f1d31] p-4 shadow-sm">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="text-base font-bold text-[#244b66] dark:text-[#cde8fb]">Collections</h2>
+          <p className="text-xs text-[#6b8fa0] dark:text-[#88aac2]">Organize your vault</p>
+        </div>
+        <button
+          onClick={onNewCollection}
+          className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold bg-[#0ea5e9] hover:bg-[#0284c7] text-white transition"
+        >
+          <Plus size={14} /> New
+        </button>
+      </div>
+
+      <div className="space-y-2">
+        <button
+          onClick={() => onSelectCollection("all")}
+          className={`w-full flex items-center justify-between rounded-xl px-3 py-2.5 border transition ${
+            activeCollection === "all"
+              ? "bg-[#e0f2fe] border-[#7dd3fc] text-[#075985] dark:bg-[#0b3552] dark:border-[#0ea5e9] dark:text-[#bfe8ff]"
+              : "bg-white border-[#d8e8f1] text-[#2f5d79] hover:bg-[#eef7fc] dark:bg-[#13263f] dark:border-[#24465f] dark:text-[#a8c8dd] dark:hover:bg-[#17314f]"
+          }`}
+        >
+          <span className="inline-flex items-center gap-2 text-sm font-medium">
+            <FolderOpen size={16} /> All Ideas
+          </span>
+          <span className="text-xs font-semibold rounded-full px-2 py-1 bg-white/70 dark:bg-white/10">{allIdeasCount}</span>
+        </button>
+
+        <button
+          onClick={() => onSelectCollection("none")}
+          className={`w-full flex items-center justify-between rounded-xl px-3 py-2.5 border transition ${
+            activeCollection === "none"
+              ? "bg-[#e0f2fe] border-[#7dd3fc] text-[#075985] dark:bg-[#0b3552] dark:border-[#0ea5e9] dark:text-[#bfe8ff]"
+              : "bg-white border-[#d8e8f1] text-[#2f5d79] hover:bg-[#eef7fc] dark:bg-[#13263f] dark:border-[#24465f] dark:text-[#a8c8dd] dark:hover:bg-[#17314f]"
+          }`}
+        >
+          <span className="inline-flex items-center gap-2 text-sm font-medium">
+            <Folder size={16} /> Uncategorised
+          </span>
+          <span className="text-xs font-semibold rounded-full px-2 py-1 bg-white/70 dark:bg-white/10">{uncategorisedCount}</span>
+        </button>
+
+        {collectionsLoading ? (
+          <div className="pt-2 text-xs text-[#6b8fa0] dark:text-[#88aac2]">Loading collections...</div>
+        ) : (
+          collections.map((collection) => {
+            const selected = activeCollection === collection._id;
+            return (
+              <div
+                key={collection._id}
+                className={`group w-full rounded-xl border px-3 py-2.5 transition ${
+                  selected
+                    ? "border-transparent"
+                    : "border-[#d8e8f1] bg-white text-[#2f5d79] hover:bg-[#eef7fc] dark:border-[#24465f] dark:bg-[#13263f] dark:text-[#a8c8dd] dark:hover:bg-[#17314f]"
+                }`}
+                style={selected
+                  ? {
+                      background: hexToRgba(collection.color, isDark ? 0.18 : 0.2),
+                      borderColor: hexToRgba(collection.color, isDark ? 0.65 : 0.45),
+                      color: isDark ? "#d5ecff" : "#12344d",
+                    }
+                  : undefined}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    onClick={() => onSelectCollection(collection._id)}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <div className="inline-flex items-center gap-2 max-w-full">
+                      <span className="text-base leading-none">{collection.emoji}</span>
+                      <span className="truncate text-sm font-semibold">{collection.name}</span>
+                    </div>
+                    <div className="text-xs opacity-80 mt-1">{collection.ideaCount} ideas</div>
+                  </button>
+                  <button
+                    onClick={() => onDeleteCollection(collection._id)}
+                    className="opacity-70 hover:opacity-100 text-[#ef4444] transition"
+                    aria-label={`Delete ${collection.name}`}
+                    title={`Delete ${collection.name}`}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {showStatus && (
+        <div className="mt-5 pt-4 border-t border-[#d3e8f3] dark:border-[#24465f]">
+          <p className="text-xs font-semibold uppercase tracking-wide text-[#6b8fa0] dark:text-[#88aac2] mb-2.5">Filter by status</p>
+          <div className="flex flex-wrap gap-2">
+            {FILTERS.map((f) => (
+              <button
+                key={f}
+                onClick={() => onSelectStatus(f)}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition ${
+                  filter === f
+                    ? "bg-[#0284c7] text-white border-[#0284c7] dark:bg-[#22d3ee] dark:text-[#07253a] dark:border-[#22d3ee]"
+                    : "bg-white text-[#2f5d79] border-[#d3e8f3] hover:bg-[#eef8fd] dark:bg-[#11243c] dark:text-[#a8c8dd] dark:border-[#2c4f68] dark:hover:bg-[#17314f]"
+                }`}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DashboardClient({ ideas, userName, userId, loading }: {
   ideas: Idea[];
   userName: string;
@@ -169,6 +311,7 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
   const [collectionError, setCollectionError] = useState("");
   const [shippedOpen, setShippedOpen] = useState(false);
   const [abandonedOpen, setAbandonedOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
@@ -317,6 +460,36 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
     };
   }, [ideasState, query, filter]);
 
+  const shippedExpanded = shippedOpen || filter === "Shipped";
+  const abandonedExpanded = abandonedOpen || filter === "Abandoned";
+  const activeCollectionLabel =
+    activeCollection === "all" ? "All Ideas"
+      : activeCollection === "none" ? "Uncategorised"
+        : collections.find((c) => c._id === activeCollection)?.name ?? "Collection";
+
+  const selectCollection = (key: CollectionFilter) => {
+    setActiveCollection(key);
+    setDrawerOpen(false);
+  };
+  const selectStatus = (f: typeof FILTERS[number]) => {
+    setFilter(f);
+    setDrawerOpen(false);
+  };
+
+  const browsePanelProps = {
+    collections,
+    collectionsLoading,
+    allIdeasCount,
+    uncategorisedCount,
+    activeCollection,
+    onSelectCollection: selectCollection,
+    filter,
+    onSelectStatus: selectStatus,
+    onNewCollection: () => { setCollectionModalOpen(true); setDrawerOpen(false); },
+    onDeleteCollection: (id: string) => void handleDeleteCollection(id),
+    isDark,
+  };
+
   return (
     <div className="min-h-screen px-3 sm:px-5 lg:px-6 2xl:px-8 py-4 md:py-8"
       style={{
@@ -338,104 +511,60 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
         @keyframes shimmer {
           100% { transform: translateX(100%); }
         }
+        @keyframes slideInLeft {
+          from { transform: translateX(-100%); }
+          to { transform: translateX(0); }
+        }
       `}</style>
 
       <main className="mx-auto w-full max-w-[1920px]">
         <div className="flex flex-col xl:flex-row gap-6 items-start">
-          <aside className="w-full xl:w-[25%] xl:min-w-[280px] xl:max-w-[360px] shrink-0 xl:sticky xl:top-24">
-            <div className="rounded-2xl border border-[#d3e8f3] dark:border-[#24465f] bg-[#f8fdff] dark:bg-[#0f1d31] p-4 shadow-sm">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-base font-bold text-[#244b66] dark:text-[#cde8fb]">Collections</h2>
-                  <p className="text-xs text-[#6b8fa0] dark:text-[#88aac2]">Organize your vault</p>
-                </div>
-                <button
-                  onClick={() => setCollectionModalOpen(true)}
-                  className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold bg-[#0ea5e9] hover:bg-[#0284c7] text-white transition"
-                >
-                  <Plus size={14} /> New
-                </button>
-              </div>
-
-              <div className="space-y-2">
-                <button
-                  onClick={() => setActiveCollection("all")}
-                  className={`w-full flex items-center justify-between rounded-xl px-3 py-2.5 border transition ${
-                    activeCollection === "all"
-                      ? "bg-[#e0f2fe] border-[#7dd3fc] text-[#075985] dark:bg-[#0b3552] dark:border-[#0ea5e9] dark:text-[#bfe8ff]"
-                      : "bg-white border-[#d8e8f1] text-[#2f5d79] hover:bg-[#eef7fc] dark:bg-[#13263f] dark:border-[#24465f] dark:text-[#a8c8dd] dark:hover:bg-[#17314f]"
-                  }`}
-                >
-                  <span className="inline-flex items-center gap-2 text-sm font-medium">
-                    <FolderOpen size={16} /> All Ideas
-                  </span>
-                  <span className="text-xs font-semibold rounded-full px-2 py-1 bg-white/70 dark:bg-white/10">{allIdeasCount}</span>
-                </button>
-
-                <button
-                  onClick={() => setActiveCollection("none")}
-                  className={`w-full flex items-center justify-between rounded-xl px-3 py-2.5 border transition ${
-                    activeCollection === "none"
-                      ? "bg-[#e0f2fe] border-[#7dd3fc] text-[#075985] dark:bg-[#0b3552] dark:border-[#0ea5e9] dark:text-[#bfe8ff]"
-                      : "bg-white border-[#d8e8f1] text-[#2f5d79] hover:bg-[#eef7fc] dark:bg-[#13263f] dark:border-[#24465f] dark:text-[#a8c8dd] dark:hover:bg-[#17314f]"
-                  }`}
-                >
-                  <span className="inline-flex items-center gap-2 text-sm font-medium">
-                    <Folder size={16} /> Uncategorised
-                  </span>
-                  <span className="text-xs font-semibold rounded-full px-2 py-1 bg-white/70 dark:bg-white/10">{uncategorisedCount}</span>
-                </button>
-
-                {collectionsLoading ? (
-                  <div className="pt-2 text-xs text-[#6b8fa0] dark:text-[#88aac2]">Loading collections...</div>
-                ) : (
-                  collections.map((collection) => {
-                    const selected = activeCollection === collection._id;
-                    return (
-                      <div
-                        key={collection._id}
-                        className={`group w-full rounded-xl border px-3 py-2.5 transition ${
-                          selected
-                            ? "border-transparent"
-                            : "border-[#d8e8f1] bg-white text-[#2f5d79] hover:bg-[#eef7fc] dark:border-[#24465f] dark:bg-[#13263f] dark:text-[#a8c8dd] dark:hover:bg-[#17314f]"
-                        }`}
-                        style={selected
-                          ? {
-                              background: hexToRgba(collection.color, isDark ? 0.18 : 0.2),
-                              borderColor: hexToRgba(collection.color, isDark ? 0.65 : 0.45),
-                              color: isDark ? "#d5ecff" : "#12344d",
-                            }
-                          : undefined}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <button
-                            onClick={() => setActiveCollection(collection._id)}
-                            className="min-w-0 flex-1 text-left"
-                          >
-                            <div className="inline-flex items-center gap-2 max-w-full">
-                              <span className="text-base leading-none">{collection.emoji}</span>
-                              <span className="truncate text-sm font-semibold">{collection.name}</span>
-                            </div>
-                            <div className="text-xs opacity-80 mt-1">{collection.ideaCount} ideas</div>
-                          </button>
-                          <button
-                            onClick={() => void handleDeleteCollection(collection._id)}
-                            className="opacity-70 hover:opacity-100 text-[#ef4444] transition"
-                            aria-label={`Delete ${collection.name}`}
-                            title={`Delete ${collection.name}`}
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
+          {/* Desktop collections sidebar */}
+          <aside className="hidden xl:block xl:w-[25%] xl:min-w-[280px] xl:max-w-[360px] shrink-0 xl:sticky xl:top-24">
+            <BrowsePanel {...browsePanelProps} />
           </aside>
 
+          {/* Mobile / tablet drawer */}
+          {drawerOpen && (
+            <div className="xl:hidden fixed inset-0 z-[80]">
+              <div
+                className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+                onClick={() => setDrawerOpen(false)}
+                aria-hidden
+              />
+              <div
+                className="absolute left-0 top-0 h-full w-[86%] max-w-[340px] overflow-y-auto p-4 shadow-2xl"
+                style={{ animation: "slideInLeft 0.25s ease", background: isDark ? "#0a1424" : "#f4fbff" }}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-base font-bold text-[#244b66] dark:text-[#cde8fb]">Browse</h2>
+                  <button
+                    onClick={() => setDrawerOpen(false)}
+                    className="rounded-full p-1.5 text-[#6b8fa0] hover:bg-[#eef7fc] dark:hover:bg-[#17314f]"
+                    aria-label="Close menu"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+                <BrowsePanel {...browsePanelProps} showStatus />
+              </div>
+            </div>
+          )}
+
           <section className="w-full xl:flex-1 rounded-[28px] border border-white/60 dark:border-white/10 bg-white/70 dark:bg-[rgba(10,18,34,0.7)] backdrop-blur-xl shadow-[0_25px_70px_rgba(2,132,199,0.15)] dark:shadow-[0_25px_70px_rgba(0,0,0,0.45)] p-4 sm:p-6 lg:p-8">
+            {/* Mobile browse trigger */}
+            <button
+              onClick={() => setDrawerOpen(true)}
+              className="xl:hidden mb-4 w-full flex items-center justify-between rounded-2xl border border-[#d3e8f3] dark:border-[#24465f] bg-white/80 dark:bg-[#11243c]/80 px-4 py-3 text-left"
+            >
+              <span className="flex items-center gap-2.5 text-sm font-semibold text-[#1f4560] dark:text-[#cfe6fb]">
+                <Menu size={18} /> {activeCollectionLabel}
+              </span>
+              <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-[#e0f2fe] text-[#075985] dark:bg-[#0b3552] dark:text-[#bfe8ff]">
+                {filter === "All" ? "Filter" : filter}
+              </span>
+            </button>
+
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
             <div>
               <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[#1f4560] dark:text-[#d5ecff]">
@@ -478,7 +607,7 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
           </div>
 
             <section className="min-w-0">
-              <div className="flex flex-wrap gap-2 mb-4">
+              <div className="hidden sm:flex flex-wrap gap-2 mb-4">
                 {FILTERS.map((f) => (
                   <button
                     key={f}
@@ -534,13 +663,13 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
                             ? "border-[#3b2060] bg-[#130d24] text-[#a78bfa] hover:bg-[#1a1130]"
                             : "border-[#ddd6fe] bg-white/70 text-[#7c3aed] hover:bg-[#f5f3ff]"
                         }`}>
-                          {shippedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                          {shippedExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                           Shipped · {shippedIdeas.length}
                         </span>
                         <div className="flex-1 h-px" style={{ background: isDark ? "rgba(139,92,246,0.2)" : "rgba(139,92,246,0.25)" }} />
                       </button>
 
-                      {shippedOpen && (
+                      {shippedExpanded && (
                         <div
                           className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-5"
                           style={{ opacity: 0.88 }}
@@ -578,13 +707,13 @@ export default function DashboardClient({ ideas, userName, userId, loading }: {
                             ? "border-[#5a1c1c] bg-[#1a0a0a] text-[#f87171] hover:bg-[#220d0d]"
                             : "border-[#fecaca] bg-white/70 text-[#dc2626] hover:bg-[#fef2f2]"
                         }`}>
-                          {abandonedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                          {abandonedExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                           Abandoned · {abandonedIdeas.length}
                         </span>
                         <div className="flex-1 h-px" style={{ background: isDark ? "rgba(239,68,68,0.18)" : "rgba(239,68,68,0.22)" }} />
                       </button>
 
-                      {abandonedOpen && (
+                      {abandonedExpanded && (
                         <div
                           className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-5"
                           style={{ opacity: 0.65 }}
@@ -745,7 +874,7 @@ function FloatingChatWidget({ userId }: { userId: string }) {
           }}
           className="[background:rgba(255,255,255,0.96)] [backdrop-filter:blur(20px)] dark:[background:rgba(14,20,36,0.96)]"
         >
-          <ChatWindow userId={userId} compact onClose={() => setOpen(false)} />
+          <UnifiedChatWindow userId={userId} compact onClose={() => setOpen(false)} />
         </div>
       )}
 

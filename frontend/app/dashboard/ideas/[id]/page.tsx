@@ -294,7 +294,7 @@ export default function IdeaDetailPage({ params }: { params: Promise<{ id: strin
             {/* Action buttons */}
             <div style={{ display: "flex", gap: "0.8rem", marginTop: "2rem", flexWrap: "wrap" }}>
               <button onClick={() => {
-                reset({ title: idea.title, summary: idea.summary, description: idea.description ?? "", tags: idea.tags ?? [], status: idea.status as FormData["status"], priority: idea.priority as FormData["priority"] });
+                reset({ title: idea.title, summary: idea.summary, description: idea.description ?? "", tags: idea.tags ?? [], status: idea.status as FormData["status"], priority: idea.priority as FormData["priority"], collectionId: idea.collectionId ?? "none" });
                 setTagInput("");
                 setImageFile(null);
                 setPreview(idea.imageUrl ?? null);

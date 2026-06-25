@@ -120,11 +120,11 @@ export default function IdeaCard({
           </div>
         )}
 
-        <div style={{ padding: "1.4rem" }} className="sm:p-[1.4rem] p-5">
+        <div className="p-4 sm:p-[1.4rem]">
           {/* Optional image */}
           {image && (
-            <img src={image} alt={title} style={{
-              width: "100%", height: 140, objectFit: "cover", borderRadius: 14,
+            <img src={image} alt={title} className="h-28 sm:h-[140px]" style={{
+              width: "100%", objectFit: "cover", borderRadius: 14,
               boxShadow: "0 4px 14px rgba(0,0,0,0.1)", marginBottom: "0.8rem", display: "block",
             }} />
           )}
@@ -142,7 +142,7 @@ export default function IdeaCard({
           <p style={{
             fontWeight: 700, letterSpacing: "-0.2px",
             margin: "0.6rem 0 0.3rem",
-          }} className="[color:#1a3a44] dark:[color:#e6eefc] text-[1.1rem] sm:text-[1.05rem]">
+          }} className="[color:#1a3a44] dark:[color:#e6eefc] text-[0.98rem] sm:text-[1.05rem]">
             {title}
           </p>
 

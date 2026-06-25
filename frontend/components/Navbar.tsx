@@ -15,7 +15,6 @@ import {
   Menu,
   Loader2,
   Sparkles,
-  Bot,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -32,8 +31,7 @@ interface NavbarProps {
 
 const NAV_LINKS = [
   { label: "Dashboard", href: "/dashboard",          icon: LayoutDashboard },
-  { label: "Vault AI",  href: "/dashboard/chat",    icon: Sparkles },
-  { label: "AI Agent",  href: "/dashboard/agent",   icon: Bot },
+  { label: "Vault AI",  href: "/dashboard/ai",       icon: Sparkles },
   { label: "Profile",   href: "/dashboard/profile",  icon: User },
   { label: "Settings",  href: "/dashboard/settings", icon: Settings },
 ];

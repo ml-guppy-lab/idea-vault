@@ -54,11 +54,26 @@ interface ProposalCardProps {
 	proposal: Proposal;
 	onAccept: (proposal: Proposal) => Promise<void>;
 	onReject: (proposal: Proposal) => void;
+	/**
+	 * Final state of a proposal that was already resolved in a previous render
+	 * (e.g. restored from sessionStorage). When set, the card renders in its
+	 * resolved state and cannot be accepted again — this prevents a reloaded
+	 * "pending" card from being accepted twice (which would duplicate ideas/tasks).
+	 */
+	initialStatus?: "accepted" | "rejected";
+	/** Reports the terminal decision up to the parent so it can be persisted. */
+	onResolved?: (proposalId: string, status: "accepted" | "rejected") => void;
 }
 
-export function ProposalCard({ proposal, onAccept, onReject }: ProposalCardProps) {
+export function ProposalCard({
+	proposal,
+	onAccept,
+	onReject,
+	initialStatus,
+	onResolved,
+}: ProposalCardProps) {
 	const [status, setStatus] = useState<"pending" | "accepting" | "accepted" | "rejected">(
-		"pending"
+		initialStatus ?? "pending"
 	);
 
 	const handleAccept = async () => {
@@ -66,6 +81,7 @@ export function ProposalCard({ proposal, onAccept, onReject }: ProposalCardProps
 			setStatus("accepting");
 			await onAccept(proposal);
 			setStatus("accepted");
+			onResolved?.(proposal.proposal_id, "accepted");
 		} catch {
 			// Keep the card actionable if apply fails.
 			setStatus("pending");
@@ -75,6 +91,7 @@ export function ProposalCard({ proposal, onAccept, onReject }: ProposalCardProps
 	const handleReject = () => {
 		onReject(proposal);
 		setStatus("rejected");
+		onResolved?.(proposal.proposal_id, "rejected");
 	};
 
 	const getIcon = () => {

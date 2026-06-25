@@ -9,14 +9,19 @@ from app.services.agentic_ai.agent_service import execute_proposal, run_agent
 router = APIRouter(prefix="/agent", tags=["agent"])
 
 
-@router.post("", response_model=AgentResponse)
+@router.post("", response_model=AgentResponse, deprecated=True)
 async def run_agent_endpoint(
 	request: ChatRequest,
 	current_user: User = Depends(get_current_user),
 ) -> AgentResponse:
 	"""
 	Run the agent for one user message.
-	
+
+	DEPRECATED: superseded by POST /api/ai/chat, which auto-routes write-intent
+	messages here. Kept alive for backward compatibility; will be removed in a
+	future cleanup pass. The approval step (POST /api/agent/decide) is NOT
+	deprecated.
+
 	Returns assistant text plus pending proposals.
 	No database write occurs in this endpoint.
 	"""
