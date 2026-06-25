@@ -791,9 +791,10 @@ Three pieces working together:
 - **Query rewriting.** Before retrieval, a fast LLM call uses the history to rewrite a follow-up
   into a **standalone search query** (*"which of these relate to weight loss?"* →
   *"ideas about weight loss and diet"*). The rewritten query is used **only for retrieval**; the
-  original message is still what the answer model sees, so replies stay natural. A free regex
-  pre-check skips the rewrite call entirely when the message has no referential words (*"do I have
-  any fitness ideas?"* is already a good query), so we only spend a call when it actually helps.
+  original message is still what the answer model sees, so replies stay natural. Whenever history
+  exists we always run the reformulation (the model returns the message unchanged if it is already
+  self-contained) — this also feeds the intent classifier a context-grounded query, so elliptical
+  follow-ups like *"what about crocodiles?"* are no longer misread as off-topic.
 
 ### Decisions
 - **Security: user_id always from the JWT** when building the Redis key — never from the request
@@ -804,11 +805,14 @@ Three pieces working together:
   streaming completes; errors are never written, so a failed turn can be retried cleanly.
 - **session_id delivery differs by path.** The agent (write) path returns it in the JSON body; the
   RAG (read) path can't, so it emits a leading `{"type":"session", ...}` SSE event the client reads.
-- **Rewriting only when it helps.** Skipped on the first message (no history), skipped when the
-  message has no referential words (a free regex check — *"which of these"*, *"the second one"*,
-  *"expand on it"*), and falls back to the original message on any error. A separate "only if intent
-  is semantic" gate was **deliberately not added**: intent is classified downstream, so gating on it
-  would cost an extra LLM call — the regex already filters out greetings/counts/listings for free.
+- **Rewrite whenever there is history (no keyword gate).** An earlier version skipped rewriting
+  unless the message contained a referential word ("these", "it", "that one"). That broke
+  *elliptical* follow-ups like *"what about crocodiles?"* — no pronoun, but fully context-dependent:
+  the bare query reached the off-topic guardrail and got a canned refusal. The fix follows the
+  standard history-aware-retriever pattern: always reformulate when history exists and let the LLM
+  no-op truly standalone messages. A separate "only if intent is semantic" gate was also **not**
+  added — intent is classified downstream, so gating on it would cost an extra LLM call, and the
+  reformulation already grounds the query so the classifier routes it correctly.
 - **History threads into both brains.** Recent turns are inserted between the system prompt and the
   new message for both the RAG answer and the agent loop, so follow-ups like *"now improve it"* work.
 - **Backward compatible.** New params are all optional/keyword — the legacy `/api/chat` and
