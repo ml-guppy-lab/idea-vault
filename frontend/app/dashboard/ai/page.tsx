@@ -1,18 +1,26 @@
 /**
- * /dashboard/chat — Full-page Vault AI chat.
+ * /dashboard/ai — Full-page Vault AI.
  *
- * Rendered inside the existing DashboardLayout so the Navbar is present.
- * ChatWindow reads history from sessionStorage keyed by userId, so history
- * is isolated per account and survives navigation from the floating widget.
+ * A single conversation surface that handles both question answering (RAG
+ * streaming) and idea improvement (agent proposals). The user never selects a
+ * mode — the backend decides per message and UnifiedChatWindow renders the
+ * right UI automatically.
+ *
+ * Rendered inside DashboardLayout (so the Navbar is present). UnifiedChatWindow
+ * reads history from sessionStorage keyed by userId, isolated per account.
  */
 
 import { cookies } from "next/headers";
-import ChatWindow from "@/components/chat/ChatWindow";
 import { Sparkles } from "lucide-react";
+
+import UnifiedChatWindow from "@/components/chat/UnifiedChatWindow";
 
 export const metadata = { title: "Vault AI — Idea Vault" };
 
-const API = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+const API =
+  process.env.INTERNAL_API_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:8000/api";
 
 async function getUserId(): Promise<string> {
   const cookieStore = await cookies();
@@ -24,14 +32,14 @@ async function getUserId(): Promise<string> {
       cache: "no-store",
     });
     if (!res.ok) return "";
-    const data = await res.json() as { id: string };
+    const data = (await res.json()) as { id: string };
     return data.id;
   } catch {
     return "";
   }
 }
 
-export default async function ChatPage() {
+export default async function VaultAiPage() {
   const userId = await getUserId();
   return (
     <div
@@ -54,21 +62,12 @@ export default async function ChatPage() {
           flexShrink: 0,
         }}
       >
-        <Sparkles
-          size={22}
-          className="text-[#3d7a8c] dark:text-[#b980f0]"
-        />
-        <h1
-          className="logo-text"
-          style={{ fontSize: "1.5rem", margin: 0 }}
-        >
+        <Sparkles size={22} className="text-[#3d7a8c] dark:text-[#b980f0]" />
+        <h1 className="logo-text" style={{ fontSize: "1.5rem", margin: 0 }}>
           Vault AI
         </h1>
-        <span
-          style={{ fontSize: "0.8rem", marginTop: 2 }}
-          className="text-[#6b8fa0]"
-        >
-          — your idea brainstorming assistant
+        <span style={{ fontSize: "0.8rem", marginTop: 2 }} className="text-[#6b8fa0]">
+          — ask about your ideas, or ask me to improve them
         </span>
       </div>
 
@@ -88,8 +87,7 @@ export default async function ChatPage() {
           dark:[background:rgba(16,22,38,0.9)] dark:[border-color:rgba(180,160,240,0.25)]
         "
       >
-        {/* fullPage ChatWindow — history scoped to this user's account */}
-        <ChatWindow userId={userId} />
+        <UnifiedChatWindow userId={userId} />
       </div>
     </div>
   );

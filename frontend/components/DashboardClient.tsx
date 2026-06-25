@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Search, Plus, Sparkles, X, Folder, FolderOpen, Trash2, ChevronDown, ChevronRight, Menu } from "lucide-react";
 import { useTheme } from "next-themes";
 import IdeaCard from "@/components/IdeaCard";
-import ChatWindow from "@/components/chat/ChatWindow";
+import UnifiedChatWindow from "@/components/chat/UnifiedChatWindow";
 import type { Task } from "@/types/task";
 import type { Collection } from "@/types/collection";
 
@@ -874,7 +874,7 @@ function FloatingChatWidget({ userId }: { userId: string }) {
           }}
           className="[background:rgba(255,255,255,0.96)] [backdrop-filter:blur(20px)] dark:[background:rgba(14,20,36,0.96)]"
         >
-          <ChatWindow userId={userId} compact onClose={() => setOpen(false)} />
+          <UnifiedChatWindow userId={userId} compact onClose={() => setOpen(false)} />
         </div>
       )}
 
