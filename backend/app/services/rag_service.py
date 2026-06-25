@@ -150,6 +150,7 @@ When suggesting next steps, keep them specific and actionable."""
 async def stream_rag_response(
     user_message: str,
     context: dict,
+    history: list[dict] | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
     LLM streaming layer — receives pre-fetched context from QueryRouter.
@@ -168,11 +169,16 @@ async def stream_rag_response(
     handled so the same code works across all configured providers.
     """
     # ── Step 1: Build intent-aware prompt ─────────────────────────────────────
-    messages = [
-        {"role": "system", "content": _build_system_prompt(context)},
-        # Truncate user input — blocks prompt injection via oversized messages.
-        {"role": "user", "content": user_message[:_MAX_USER_MSG_CHARS]},
-    ]
+    # Prior turns (already windowed by the caller) go between the system prompt
+    # and the current message so the model keeps conversational context.
+    messages = [{"role": "system", "content": _build_system_prompt(context)}]
+    for turn in history or []:
+        role = turn.get("role")
+        content = turn.get("content")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content[:_MAX_USER_MSG_CHARS]})
+    # Truncate user input — blocks prompt injection via oversized messages.
+    messages.append({"role": "user", "content": user_message[:_MAX_USER_MSG_CHARS]})
 
     # ── Step 2: Select model tier based on intent ─────────────────────────────
     # FAST tier (llama3.2:3b / llama-3.2-3b-instruct) — greetings, listing, counts.

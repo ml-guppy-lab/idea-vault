@@ -719,3 +719,119 @@ Updated files:
 5. Try several off-topic questions (trivia, math, science, definitions) → all should be refused
    with the same scope-refusal sentence.
 
+---
+
+## Re-Summarising and Re-Embedding Edited Ideas
+
+### The bug
+Semantic search in Idea Vault ranks ideas by an **embedding** (a numeric "meaning" vector)
+built from **only the `title` + `summary`** — not the description, tags, or status.
+
+When the agent edited an idea's title/description, it left the `summary` unchanged. So after a
+meaningful edit the embedding became a stale mix (new title, old summary), and searching for the
+idea's *new* concept could fail to find it. No error, just silently wrong search results.
+
+### The fix
+When an edit genuinely changes an idea's meaning, the agent also proposes a new summary, and
+accepting it rebuilds the embedding from the new title + new summary.
+
+Two guards keep this safe:
+- **Only on real meaning changes.** `new_summary` is optional and judgment-based — the agent's
+  prompt and the tool description tell it to propose one only when a title/description change
+  alters the concept, and to omit it for typos/wording tweaks (2–3 sentences, max ~190 words).
+- **Only re-embed when needed, in the background.** Embedding is CPU-heavy, so we reuse the
+  existing `_embed_and_store` background-task pattern: save the change immediately, then re-embed
+  *after* responding — and only if the title or summary actually changed (compared against the
+  stored values). Edits that touch only status/priority skip it entirely.
+
+### Decisions
+- Matched the real helper signature `_embed_and_store(db, idea_id, title, summary)` (the spec
+  had it wrong).
+- Re-embed on genuine change only, not on every accept (mirrors the normal edit endpoint).
+- Used a local import of `_embed_and_store` inside `execute_proposal` to avoid a circular import
+  (the ideas API already depends on services).
+- Left the idea-*creation* path alone — it already summarised and embedded correctly.
+
+### Files changed
+- `backend/app/schemas/agent.py` — optional `current_summary` / `new_summary` on the update proposal.
+- `backend/app/services/agentic_ai/agent_tools.py` — `current_summary` / `new_summary` added to the
+  `propose_idea_update` tool.
+- `backend/app/services/agentic_ai/agent_service.py` — prompt guidance on when to propose a summary;
+  `execute_proposal` saves it and schedules a background re-embed (gained a `BackgroundTasks` param).
+- `backend/app/api/agent.py` — `/agent/decide` passes `BackgroundTasks` through to `execute_proposal`.
+- `frontend/components/agent/ProposalCard.tsx` — summary fields on the type plus a "Summary" `DiffView`
+  shown when a new summary is proposed.
+
+### How to verify it works
+1. Ask the agent to significantly rewrite an idea → the proposal card shows a **Summary** diff.
+2. Ask for a tiny wording fix → no summary diff appears.
+3. Accept a meaning-changing update → response returns immediately; embedding refreshes in the background.
+4. Search for the idea by its new concept → it is found, proving the embedding caught up.
+5. Accept a status/priority-only change → no re-embedding is triggered.
+
+---
+
+## Conversation History: Redis Sessions, Context Window, and Query Rewriting
+
+### The problem
+Each chat message was handled in isolation — the assistant had no memory of the conversation.
+A follow-up like *"which of these relate to weight loss?"* was meaningless: there was no "these",
+and embedding such a sentence for semantic search produces a noise vector that finds nothing.
+
+### The fix
+Three pieces working together:
+- **Server-side sessions (Redis).** Every conversation gets a unique `session_id`. Messages are
+  stored under `chat_session:{user_id}:{session_id}` and loaded on each new message so the model
+  sees prior turns. Redis is used (not MongoDB) for microsecond reads/writes and a built-in **TTL**
+  that auto-expires idle sessions after **3 hours** — no cleanup job, no stale data.
+- **Context-window management (sliding window).** LLMs have a finite context, so we feed only the
+  **last 10 messages** to the model and cap what we keep in Redis (40 messages). Recent turns are
+  enough for continuity without blowing the token budget. (A rolling LLM summary of older turns
+  could be layered on later.)
+- **Query rewriting.** Before retrieval, a fast LLM call uses the history to rewrite a follow-up
+  into a **standalone search query** (*"which of these relate to weight loss?"* →
+  *"ideas about weight loss and diet"*). The rewritten query is used **only for retrieval**; the
+  original message is still what the answer model sees, so replies stay natural.
+
+### Decisions
+- **Security: user_id always from the JWT** when building the Redis key — never from the request
+  body. A forged/guessed `session_id` can only ever reach the caller's own history.
+- **Pass `redis` as a parameter** (matching `rate_limit.py` / dependency injection) rather than
+  importing a module global — consistent and testable.
+- **Persist only clean exchanges.** The user message + full assistant reply are saved *after*
+  streaming completes; errors are never written, so a failed turn can be retried cleanly.
+- **session_id delivery differs by path.** The agent (write) path returns it in the JSON body; the
+  RAG (read) path can't, so it emits a leading `{"type":"session", ...}` SSE event the client reads.
+- **Rewriting only when it helps.** Skipped on the first message (no history) and falls back to the
+  original message on any error — a slightly worse query beats a broken request.
+- **History threads into both brains.** Recent turns are inserted between the system prompt and the
+  new message for both the RAG answer and the agent loop, so follow-ups like *"now improve it"* work.
+- **Backward compatible.** New params are all optional/keyword — the legacy `/api/chat` and
+  `/api/agent` callers are unchanged and store nothing.
+
+### Files changed
+- `backend/app/services/session_service.py` *(new)* — Redis session storage: `generate_session_id`,
+  `get_session_history`, `save_exchange`, `clear_session`, `history_window`; TTL + window constants.
+- `backend/app/ai/query_rewriter.py` *(new)* — `rewrite_query(history, message)` using the fast
+  classifier model, with a fall-back to the original message.
+- `backend/app/schemas/chat.py` — `ChatRequest` gains optional `session_id`.
+- `backend/app/ai/chat_pipeline.py` — `stream_rag_sse` accepts `history`/`redis`/`session_id`, does
+  query rewriting, accumulates the reply and persists the exchange; `refusal_stream` emits the
+  session event.
+- `backend/app/services/rag_service.py` — `stream_rag_response` accepts `history` and inserts prior
+  turns into the prompt.
+- `backend/app/services/agentic_ai/agent_service.py` — `run_agent` accepts `history` and inserts
+  prior turns before the new message.
+- `backend/app/api/ai.py` — `unified_chat` generates/loads the session, threads history into both
+  paths, saves messages, and returns `session_id`.
+- `frontend/components/chat/UnifiedChatWindow.tsx` — persists `session_id`, sends it on every
+  message, and captures it from both the JSON and SSE responses; "Clear chat" starts a fresh session.
+
+### How to verify it works
+1. Send a message → the response carries a `session_id` (SSE `session` event or JSON field).
+2. Send a second message with that `session_id` → prior turns are loaded; a follow-up like
+   *"which of those are about fitness?"* now finds the right ideas (query rewriting at work).
+3. Redis CLI: `KEYS chat_session:*` shows your key; `TTL <key>` shows it counting down from 10800s.
+4. Wait past the TTL (or `DEL` the key) → the next message starts a fresh conversation.
+5. Click **Clear chat** → a new `session_id` is issued on the next message.
+
