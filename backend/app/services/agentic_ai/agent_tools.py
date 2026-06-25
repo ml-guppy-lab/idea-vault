@@ -58,6 +58,18 @@ AGENT_TOOLS: list[dict[str, Any]] = [
 						"type": "string",
 						"description": "The proposed new description",
 					},
+					"current_summary": {
+						"type": "string",
+						"description": "The CURRENT summary of the idea (before changes)",
+					},
+					"new_summary": {
+						"type": "string",
+						"description": (
+							"The proposed new summary. Only include if the title or "
+							"description change genuinely alters the idea's meaning. "
+							"Capture the updated concept in 2-3 sentences. Max 190 words."
+						),
+					},
 					"new_status": {
 						"type": "string",
 						"enum": [

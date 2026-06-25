@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from app.core.security import get_current_user
 from app.models.user import User
@@ -37,6 +37,7 @@ async def run_agent_endpoint(
 @router.post("/decide")
 async def decide_on_proposal(
 	decision: ProposalDecision,
+	background_tasks: BackgroundTasks,
 	current_user: User = Depends(get_current_user),
 ):
 	"""
@@ -65,7 +66,7 @@ async def decide_on_proposal(
 			)
 		# All actual writes are delegated to the service so route logic stays thin
 		# and user scoping remains centralized in one execution layer.
-		return await execute_proposal(decision.proposal, user_id)
+		return await execute_proposal(decision.proposal, user_id, background_tasks)
 
 	raise HTTPException(
 		status_code=400,
