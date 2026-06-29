@@ -170,12 +170,14 @@ async def stream_rag_response(
     """
     # ── Step 1: Build intent-aware prompt ─────────────────────────────────────
     # Prior turns (already windowed by the caller) go between the system prompt
-    # and the current message so the model keeps conversational context.
+    # and the current message so the model keeps conversational context. A
+    # leading "system" turn may carry the rolling summary of older messages; it
+    # is ours (never user-supplied), so it is safe to include.
     messages = [{"role": "system", "content": _build_system_prompt(context)}]
     for turn in history or []:
         role = turn.get("role")
         content = turn.get("content")
-        if role in ("user", "assistant") and content:
+        if role in ("user", "assistant", "system") and content:
             messages.append({"role": role, "content": content[:_MAX_USER_MSG_CHARS]})
     # Truncate user input — blocks prompt injection via oversized messages.
     messages.append({"role": "user", "content": user_message[:_MAX_USER_MSG_CHARS]})

@@ -162,12 +162,13 @@ async def run_agent(
 
 	# Conversation state sent back to the model on each iteration. Prior turns
 	# (already windowed by the caller) give the agent context for follow-ups like
-	# "now improve it" — inserted between the system prompt and the new message.
+	# "now improve it" — inserted between the system prompt and the new message. A
+	# leading "system" turn may carry the rolling summary (ours, not user input).
 	messages: list[dict[str, Any]] = [{"role": "system", "content": AGENT_SYSTEM_PROMPT}]
 	for turn in history or []:
 		role = turn.get("role")
 		content = turn.get("content")
-		if role in ("user", "assistant") and content:
+		if role in ("user", "assistant", "system") and content:
 			messages.append({"role": role, "content": content[:500]})
 	messages.append({"role": "user", "content": user_message.strip()[:500]})
 

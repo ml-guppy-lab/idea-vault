@@ -844,3 +844,56 @@ Three pieces working together:
 4. Wait past the TTL (or `DEL` the key) → the next message starts a fresh conversation.
 5. Click **Clear chat** → a new `session_id` is issued on the next message.
 
+---
+
+## Rolling summary memory (context-window management)
+
+### The problem
+The sliding window already caps prompt size, but it *forgets* anything older than the last 10
+messages. In a long session the model loses the broad topic of the earlier conversation, and a
+naive fix (summarise on every turn, with the answer model) would add an LLM call per message —
+exactly what is throttling us on the free tier.
+
+### The fix
+A **rolling summary** keeps memory of old turns without growing the prompt. Once a conversation
+passes `_SUMMARY_TRIGGER_MESSAGES` (20), the oldest messages (everything beyond the recent 10) are
+folded into a short running summary; only the last 10 messages plus that summary are kept. On the
+next read, `get_managed_history` returns the summary as a leading `system` message followed by the
+recent window, so the model still "remembers" the earlier topic while the prompt stays bounded.
+
+### Decisions (the cost-conscious build)
+- **Summarise on the SAVE path, not on read.** `save_exchange` (which runs *after* the reply has
+  streamed) does the folding, so summarisation never adds latency to what the user sees.
+  `get_managed_history` is a pure read — it never calls the LLM.
+- **Rare trigger (20 messages).** Most conversations here are short and never summarise at all; the
+  extra call only fires on genuinely long sessions, so it doesn't worsen rate limits.
+- **Fast/cheap model.** Summarisation uses the same `classifier_model` as query rewriting, not the
+  answer model.
+- **Cached in Redis.** The summary is stored once and reused on every subsequent turn until the next
+  fold — it is regenerated only when a *new* batch of old messages needs folding in.
+- **Fail-safe, never lose content.** If the summariser is rate-limited/errors it returns `None`; the
+  exchange is still saved (messages kept, bounded by the `_MAX_STORED_MESSAGES` hard cap) and the
+  existing summary is preserved, so nothing is silently dropped.
+- **Backward compatible storage.** Sessions are now `{"summary", "messages"}`; older bare-list
+  sessions are still read transparently, so nothing breaks on deploy.
+- **Summary reaches the model.** The RAG and agent prompt builders now accept a leading `system`
+  turn from history — this is *our* controlled summary (never user input), so it's safe to include.
+
+### Files changed
+- `backend/app/ai/history_summarizer.py` *(new)* — `summarize_history(previous_summary, messages)`
+  folds a batch into the running summary using the fast model; returns `None` on failure.
+- `backend/app/services/session_service.py` — structured `{"summary","messages"}` storage with
+  `_load`/`_store`; new `get_managed_history` (summary + window, no LLM); `save_exchange` now folds
+  old turns into the summary once past the trigger; `get_session_history` kept for compatibility.
+- `backend/app/api/ai.py` — `unified_chat` now builds the context via `get_managed_history`.
+- `backend/app/services/rag_service.py`, `backend/app/services/agentic_ai/agent_service.py` — accept
+  a leading `system` (summary) turn from history.
+
+### How to verify it works
+1. Hold one `session_id` and send 11+ exchanges (22+ messages). After the 11th, the Redis blob
+   becomes `{"summary": "...", "messages": [...]}` with `messages` trimmed back to the recent 10.
+2. `GET chat_session:<uid>:<sid>` in the Redis CLI shows the cached summary text.
+3. Ask about a topic from the *earliest* messages — the reply still reflects it, because the summary
+   is injected as a leading system message (the prompt no longer carries those raw turns).
+4. The prompt size stays flat as the conversation grows past 10 messages — no context overflow.
+

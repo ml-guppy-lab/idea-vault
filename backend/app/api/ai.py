@@ -46,8 +46,7 @@ from app.services.intent_classifier import (
 )
 from app.services.session_service import (
     generate_session_id,
-    get_session_history,
-    history_window,
+    get_managed_history,
     save_exchange,
 )
 
@@ -87,8 +86,9 @@ async def unified_chat(
     # Redis key from the JWT user_id (never trust the body to identify a user),
     # so a forged session_id can only ever touch this user's own history.
     session_id = request.session_id or generate_session_id()
-    history = await get_session_history(redis, user_id, session_id)
-    window = history_window(history)
+    # Managed history = the rolling summary (if any) + the recent message window,
+    # ready to drop straight into the prompt.
+    window = await get_managed_history(redis, user_id, session_id)
 
     # ── Hard guardrail (zero LLM): explicit "write code" requests ──────────────
     # A high-precision detector catches the clearest code-generation requests

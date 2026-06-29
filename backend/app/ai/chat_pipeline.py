@@ -23,7 +23,7 @@ from app.ai.query_decomposer import decompose_and_route
 from app.ai.query_rewriter import rewrite_query
 from app.services.intent_classifier import SCOPE_REFUSAL, QueryIntent
 from app.services.rag_service import stream_rag_response
-from app.services.session_service import history_window, save_exchange
+from app.services.session_service import save_exchange
 
 logger = logging.getLogger("app.chat")
 
