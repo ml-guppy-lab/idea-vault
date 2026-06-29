@@ -71,7 +71,9 @@ async def rewrite_query(history: list[dict], message: str) -> str:
     recent = [
         m
         for m in history
-        if m.get("role") in ("user", "assistant") and m.get("content")
+        if m.get("role") in ("user", "assistant")
+        and m.get("content")
+        and not m.get("interrupted")  # skip half-finished (Stopped) turns
     ][-_MAX_HISTORY_MESSAGES:]
     if not recent:
         return message

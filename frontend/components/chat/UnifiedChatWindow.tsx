@@ -124,6 +124,9 @@ export default function UnifiedChatWindow({
   // latest value (avoids a stale closure) and updates take effect immediately.
   const sessionIdRef = useRef<string | null>(initial.sessionId);
 
+  // Aborts the in-flight request when the user hits Stop (or sends again).
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Persist completed exchanges (messages + resolved map + session id) once idle.
@@ -232,10 +235,15 @@ export default function UnifiedChatWindow({
       // (SSE status events) or the agent JSON arrives.
       setStatusMessage("Thinking…");
 
+      // Fresh controller per request so Stop cancels only this turn.
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
       try {
         const res = await fetch("/api/ai/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             message: userText,
             // null on the first message — the backend starts a session and
@@ -291,11 +299,17 @@ export default function UnifiedChatWindow({
           );
         }
       } catch (err) {
+        // Intentional Stop: keep the partial reply (already flagged interrupted
+        // by stopGeneration) and show no error.
+        if (err instanceof Error && err.name === "AbortError") {
+          return;
+        }
         const msg = err instanceof Error ? err.message : "Something went wrong";
         setError(msg);
         // Remove the incomplete assistant bubble on a hard failure.
         setMessages((prev) => prev.filter((m) => m.id !== assistantId));
       } finally {
+        abortControllerRef.current = null;
         setStatusMessage(null);
         setMessages((prev) =>
           prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false } : m)),
@@ -306,6 +320,30 @@ export default function UnifiedChatWindow({
     [consumeStream],
   );
 
+  // ── Stop generation ─────────────────────────────────────────────────────────
+  // Cancels the in-flight stream (AbortController). The fetch read rejects with
+  // an AbortError that sendMessage swallows, so the partial reply stays on
+  // screen. Marks the partial as interrupted (or drops it if nothing arrived).
+  const stopGeneration = useCallback(() => {
+    abortControllerRef.current?.abort();
+    setStatusMessage(null);
+    setBusy(false);
+    setMessages((prev) => {
+      const updated = [...prev];
+      for (let i = updated.length - 1; i >= 0; i--) {
+        if (updated[i].role === "assistant") {
+          if (updated[i].content.trim()) {
+            updated[i] = { ...updated[i], isStreaming: false, interrupted: true };
+          } else {
+            // Nothing was generated yet — drop the empty placeholder bubble.
+            updated.splice(i, 1);
+          }
+          break;
+        }
+      }
+      return updated;
+    });
+  }, []);
   // ── Proposal accept / reject ────────────────────────────────────────────────
   const handleAcceptProposal = useCallback(
     async (proposal: Proposal) => {
@@ -563,6 +601,8 @@ export default function UnifiedChatWindow({
         <ChatInput
           onSend={sendMessage}
           disabled={busy}
+          streaming={busy}
+          onStop={stopGeneration}
           placeholder="Ask about your ideas, or ask me to improve them…"
         />
       </div>
