@@ -47,6 +47,8 @@ type ResolvedMap = Record<string, "accepted" | "rejected">;
 interface PersistedState {
   messages: UnifiedMessage[];
   resolved: ResolvedMap;
+  /** Backend conversation id. null until the first reply assigns one. */
+  sessionId: string | null;
 }
 
 // ── Storage helpers — scoped per user so accounts never share history ─────────
@@ -64,18 +66,19 @@ const WELCOME: UnifiedMessage = {
 };
 
 function loadState(userId: string): PersistedState {
-  if (typeof window === "undefined") return { messages: [WELCOME], resolved: {} };
+  if (typeof window === "undefined") return { messages: [WELCOME], resolved: {}, sessionId: null };
   try {
     const raw = sessionStorage.getItem(sessionKey(userId));
-    if (!raw) return { messages: [WELCOME], resolved: {} };
+    if (!raw) return { messages: [WELCOME], resolved: {}, sessionId: null };
     const parsed = JSON.parse(raw) as Partial<PersistedState>;
     const messages = Array.isArray(parsed.messages) && parsed.messages.length
       ? parsed.messages
       : [WELCOME];
     const resolved = parsed.resolved && typeof parsed.resolved === "object" ? parsed.resolved : {};
-    return { messages, resolved };
+    const sessionId = typeof parsed.sessionId === "string" ? parsed.sessionId : null;
+    return { messages, resolved, sessionId };
   } catch {
-    return { messages: [WELCOME], resolved: {} };
+    return { messages: [WELCOME], resolved: {}, sessionId: null };
   }
 }
 
@@ -117,11 +120,15 @@ export default function UnifiedChatWindow({
   // Transient status ("Searching your ideas...", "Thinking…"). Never persisted.
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
+  // Backend conversation id. Kept in a ref so sendMessage always reads the
+  // latest value (avoids a stale closure) and updates take effect immediately.
+  const sessionIdRef = useRef<string | null>(initial.sessionId);
+
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Persist completed exchanges (messages + resolved map) once we're idle.
+  // Persist completed exchanges (messages + resolved map + session id) once idle.
   useEffect(() => {
-    if (!busy) saveState(userId, { messages, resolved });
+    if (!busy) saveState(userId, { messages, resolved, sessionId: sessionIdRef.current });
   }, [messages, resolved, busy, userId]);
 
   // Auto-scroll to the latest message
@@ -152,9 +159,15 @@ export default function UnifiedChatWindow({
 
         try {
           const event = JSON.parse(trimmed.slice(6)) as {
-            type: "mode" | "status" | "thinking" | "text" | "done" | "error";
+            type: "mode" | "session" | "status" | "thinking" | "text" | "done" | "error";
             content: string;
           };
+
+          // "session" carries the backend conversation id for follow-ups.
+          if (event.type === "session") {
+            if (event.content) sessionIdRef.current = event.content;
+            continue;
+          }
 
           // "mode" (leading routing hint) and "thinking" tokens are not rendered.
           if (event.type === "mode" || event.type === "thinking") continue;
@@ -223,7 +236,12 @@ export default function UnifiedChatWindow({
         const res = await fetch("/api/ai/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: userText }),
+          body: JSON.stringify({
+            message: userText,
+            // null on the first message — the backend starts a session and
+            // returns its id, which we reuse on every subsequent message.
+            session_id: sessionIdRef.current,
+          }),
         });
 
         if (!res.ok) {
@@ -252,7 +270,9 @@ export default function UnifiedChatWindow({
             mode?: string;
             message?: string;
             proposals?: Proposal[];
+            session_id?: string;
           };
+          if (data.session_id) sessionIdRef.current = data.session_id;
           setStatusMessage(null);
           setMessages((prev) =>
             prev.map((m) =>
@@ -325,7 +345,9 @@ export default function UnifiedChatWindow({
 
   // ── Clear chat ──────────────────────────────────────────────────────────────
   function clearChat() {
-    const fresh: PersistedState = { messages: [WELCOME], resolved: {} };
+    const fresh: PersistedState = { messages: [WELCOME], resolved: {}, sessionId: null };
+    // Drop the backend conversation so the next message starts fresh.
+    sessionIdRef.current = null;
     setMessages(fresh.messages);
     setResolved(fresh.resolved);
     saveState(userId, fresh);

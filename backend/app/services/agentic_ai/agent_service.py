@@ -142,7 +142,9 @@ async def _create_completion_with_fallback(
 	raise last_exc  # type: ignore[misc]
 
 
-async def run_agent(user_message: str, user_id: str) -> AgentResponse:
+async def run_agent(
+	user_message: str, user_id: str, history: list[dict] | None = None
+) -> AgentResponse:
 	"""
 	Run one human-in-the-loop agent turn.
 
@@ -158,11 +160,17 @@ async def run_agent(user_message: str, user_id: str) -> AgentResponse:
 		default_headers=llm_config.extra_headers,
 	)
 
-	# Conversation state sent back to the model on each iteration.
-	messages: list[dict[str, Any]] = [
-		{"role": "system", "content": AGENT_SYSTEM_PROMPT},
-		{"role": "user", "content": user_message.strip()[:500]},
-	]
+	# Conversation state sent back to the model on each iteration. Prior turns
+	# (already windowed by the caller) give the agent context for follow-ups like
+	# "now improve it" — inserted between the system prompt and the new message. A
+	# leading "system" turn may carry the rolling summary (ours, not user input).
+	messages: list[dict[str, Any]] = [{"role": "system", "content": AGENT_SYSTEM_PROMPT}]
+	for turn in history or []:
+		role = turn.get("role")
+		content = turn.get("content")
+		if role in ("user", "assistant", "system") and content:
+			messages.append({"role": role, "content": content[:500]})
+	messages.append({"role": "user", "content": user_message.strip()[:500]})
 
 	# Proposals are pending write-intents. They are NOT executed here.
 	proposals: list[Proposal] = []

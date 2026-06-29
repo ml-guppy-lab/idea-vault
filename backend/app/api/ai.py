@@ -44,6 +44,11 @@ from app.services.intent_classifier import (
     classify_chat_route,
     is_code_generation_request,
 )
+from app.services.session_service import (
+    generate_session_id,
+    get_managed_history,
+    save_exchange,
+)
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 logger = logging.getLogger("app.chat")
@@ -76,6 +81,15 @@ async def unified_chat(
     # Reject before any LLM work — 429 is a plain JSON response.
     await check_message_rate_limit(user_id, redis)
 
+    # ── Conversation session ──────────────────────────────────────────────────
+    # A missing/blank session_id starts a fresh conversation. We ALWAYS build the
+    # Redis key from the JWT user_id (never trust the body to identify a user),
+    # so a forged session_id can only ever touch this user's own history.
+    session_id = request.session_id or generate_session_id()
+    # Managed history = the rolling summary (if any) + the recent message window,
+    # ready to drop straight into the prompt.
+    window = await get_managed_history(redis, user_id, session_id)
+
     # ── Hard guardrail (zero LLM): explicit "write code" requests ──────────────
     # A high-precision detector catches the clearest code-generation requests
     # and refuses them WITHOUT any classifier or generation call. Anything it
@@ -83,8 +97,9 @@ async def unified_chat(
     # system-prompt guardrails downstream.
     if is_code_generation_request(request.message):
         logger.info("[ai] code-generation request refused (no LLM) user=%s", user_id)
+        await save_exchange(redis, user_id, session_id, request.message, CODE_REFUSAL)
         return StreamingResponse(
-            refusal_stream(CODE_REFUSAL),
+            refusal_stream(CODE_REFUSAL, session_id),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -100,21 +115,34 @@ async def unified_chat(
     if route == ChatRoute.AGENT_WRITE:
         # The agent only PROPOSES here — no database write occurs. Approval
         # happens later via POST /api/agent/decide.
-        result = await run_agent(user_message=request.message, user_id=user_id)
+        result = await run_agent(
+            user_message=request.message, user_id=user_id, history=window
+        )
+        await save_exchange(redis, user_id, session_id, request.message, result.message)
         return JSONResponse(
             content={
                 "mode": "agent",
                 "message": result.message,
                 # mode="json" converts enums (status/priority) to JSON-safe values.
                 "proposals": [p.model_dump(mode="json") for p in result.proposals],
+                "session_id": session_id,
             }
         )
 
     # ── Read path: RAG streaming (SSE) ────────────────────────────────────────
     async def _event_generator():
-        # Leading mode event lets the client immediately know it's a RAG stream.
+        # Leading mode event lets the client immediately know it's a RAG stream;
+        # the session event lets it persist the id for follow-up messages.
         yield format_sse({"type": "mode", "content": "rag"})
-        async for chunk in stream_rag_sse(request.message, user_id, db):
+        yield format_sse({"type": "session", "content": session_id})
+        async for chunk in stream_rag_sse(
+            request.message,
+            user_id,
+            db,
+            history=window,
+            redis=redis,
+            session_id=session_id,
+        ):
             yield chunk
 
     return StreamingResponse(

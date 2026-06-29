@@ -5,7 +5,7 @@ ChatRequest  — validated request body from the frontend
 ChatMessage  — a single message in conversation history (for UI display)
 """
 
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,15 @@ class ChatRequest(BaseModel):
         min_length=1,
         max_length=_MAX_MESSAGE_CHARS,
         description="The user's question or message to the AI assistant.",
+    )
+    # Conversation session id. Omit/null to start a fresh session — the backend
+    # then generates one and returns it so follow-up messages can continue the
+    # thread. Capped to bound the Redis key; the user_id in the key always comes
+    # from the JWT, so a forged session_id can never reach another user's data.
+    session_id: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description="Conversation session id. Omit to start a new session.",
     )
 
 

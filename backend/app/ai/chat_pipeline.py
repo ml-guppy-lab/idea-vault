@@ -14,13 +14,16 @@ Event `type` values: status | thinking | text | done | error.
 
 import json
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
+import redis.asyncio as aioredis
 
 from app.ai.query_decomposer import decompose_and_route
+from app.ai.query_rewriter import rewrite_query
 from app.services.intent_classifier import SCOPE_REFUSAL, QueryIntent
 from app.services.rag_service import stream_rag_response
+from app.services.session_service import save_exchange
 
 logger = logging.getLogger("app.chat")
 
@@ -40,15 +43,20 @@ def format_sse(event: dict) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
-async def refusal_stream(text: str) -> AsyncGenerator[str, None]:
+async def refusal_stream(
+    text: str, session_id: Optional[str] = None
+) -> AsyncGenerator[str, None]:
     """
     Emit a fixed refusal as a minimal RAG-style SSE stream.
 
     Used by the deterministic guards (e.g. code-generation requests) so a
     refusal renders as a normal assistant message on the client — with NO LLM
-    call at all.
+    call at all. When a session_id is supplied it is emitted so the client can
+    keep the conversation thread.
     """
     yield format_sse({"type": "mode", "content": "rag"})
+    if session_id:
+        yield format_sse({"type": "session", "content": session_id})
     yield format_sse({"type": "text", "content": text})
     yield format_sse({"type": "done", "content": ""})
 
@@ -57,6 +65,10 @@ async def stream_rag_sse(
     message: str,
     user_id: str,
     db: AsyncIOMotorDatabase,
+    *,
+    history: Optional[list[dict]] = None,
+    redis: Optional[aioredis.Redis] = None,
+    session_id: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
     Run the full RAG pipeline for one message and yield SSE record strings.
@@ -65,13 +77,30 @@ async def stream_rag_sse(
       to every DB query so a user can only ever read their own ideas.
     - `message` is validated at the HTTP boundary (ChatRequest, max 500 chars)
       and truncated again inside the RAG service (defence in depth).
+    - `history` (already windowed) gives the model prior turns for context and
+      lets a follow-up be rewritten into a standalone search query.
+    - When `redis` + `session_id` are provided, the completed user→assistant
+      exchange is persisted to the session (read endpoint only; the legacy
+      /api/chat caller passes neither and so nothing is stored).
     - Every step is guarded so any failure yields a typed `error` event instead
       of dropping the connection and leaving the client hanging.
     """
+    history = history or []
+
+    # ── Step 0: Query rewriting for retrieval (only with prior context) ───────
+    # A follow-up like "which of these relate to weight loss?" embeds to noise on
+    # its own. With history we rewrite it into a standalone query used ONLY for
+    # retrieval; the ORIGINAL message is still what the answer model sees.
+    search_query = message
+    if history:
+        search_query = await rewrite_query(history, message)
+        if search_query != message:
+            logger.info("[chat] rewrote follow-up into standalone query user=%s", user_id)
+
     # ── Step 1 + 2: Decompose → classify each part → route ────────────────────
     yield format_sse({"type": "status", "content": "Analysing your request..."})
     try:
-        context = await decompose_and_route(query=message, user_id=user_id, db=db)
+        context = await decompose_and_route(query=search_query, user_id=user_id, db=db)
     except Exception:
         logger.exception("[chat] decompose_and_route failed for user=%s", user_id)
         yield format_sse({"type": "error", "content": "Something went wrong. Please try again."})
@@ -84,11 +113,25 @@ async def stream_rag_sse(
     if dominant_intent == QueryIntent.OUT_OF_SCOPE.value:
         yield format_sse({"type": "text", "content": SCOPE_REFUSAL})
         yield format_sse({"type": "done", "content": ""})
+        if redis is not None and session_id:
+            await save_exchange(redis, user_id, session_id, message, SCOPE_REFUSAL)
         return
 
     # Intent-specific status while the LLM generates the response.
     yield format_sse({"type": "status", "content": _STATUS_MAP.get(dominant_intent, "Processing...")})
 
-    # ── Step 3: Stream LLM response ───────────────────────────────────────────
-    async for event in stream_rag_response(user_message=message, context=context):
+    # ── Step 3: Stream LLM response (history-aware) ───────────────────────────
+    assistant_parts: list[str] = []
+    saw_error = False
+    async for event in stream_rag_response(
+        user_message=message, context=context, history=history
+    ):
+        if event.get("type") == "text":
+            assistant_parts.append(event.get("content", ""))
+        elif event.get("type") == "error":
+            saw_error = True
         yield format_sse(event)
+
+    # Persist only a clean, completed exchange so errors never pollute history.
+    if redis is not None and session_id and not saw_error:
+        await save_exchange(redis, user_id, session_id, message, "".join(assistant_parts))
