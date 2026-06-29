@@ -25,7 +25,7 @@ The client distinguishes the two modes by Content-Type:
 
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 import redis.asyncio as aioredis
@@ -62,6 +62,7 @@ logger = logging.getLogger("app.chat")
 )
 async def unified_chat(
     request: ChatRequest,
+    http_request: Request,                             # raw request — disconnect check
     current_user: User = Depends(get_current_user),    # JWT auth gate
     db: AsyncIOMotorDatabase = Depends(get_mongo_db),  # Motor DB dependency
     redis: aioredis.Redis = Depends(get_redis),        # Redis for rate limiting
@@ -142,6 +143,7 @@ async def unified_chat(
             history=window,
             redis=redis,
             session_id=session_id,
+            is_disconnected=http_request.is_disconnected,
         ):
             yield chunk
 

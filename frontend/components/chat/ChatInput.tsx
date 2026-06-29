@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, KeyboardEvent, ChangeEvent } from "react";
-import { Send, Loader2 } from "lucide-react";
+import { Send, Square } from "lucide-react";
 
 interface ChatInputProps {
   onSend: (message: string) => void;
@@ -10,6 +10,10 @@ interface ChatInputProps {
   placeholder?: string;
   /** Autofocus the textarea when chat mounts/opens. */
   autoFocus?: boolean;
+  /** True while the AI is responding — swaps Send for a Stop button. */
+  streaming?: boolean;
+  /** Cancel the in-flight response (called by the Stop button). */
+  onStop?: () => void;
 }
 
 export default function ChatInput({
@@ -17,6 +21,8 @@ export default function ChatInput({
   disabled,
   placeholder = "Ask about your ideas…",
   autoFocus = true,
+  streaming = false,
+  onStop,
 }: ChatInputProps) {
   const [value, setValue]     = useState("");
   const [focused, setFocused] = useState(false);
@@ -105,9 +111,10 @@ export default function ChatInput({
       />
 
       <button
-        onClick={submit}
-        disabled={!canSend}
-        aria-label="Send message"
+        onClick={streaming ? onStop : submit}
+        disabled={streaming ? false : !canSend}
+        aria-label={streaming ? "Stop generating" : "Send message"}
+        title={streaming ? "Stop generating" : "Send message"}
         style={{
           flexShrink: 0,
           width: 34,
@@ -117,14 +124,19 @@ export default function ChatInput({
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          cursor: canSend ? "pointer" : "not-allowed",
-          opacity: canSend ? 1 : 0.45,
+          cursor: streaming || canSend ? "pointer" : "not-allowed",
+          opacity: streaming || canSend ? 1 : 0.45,
           transition: "all 0.2s ease",
+          background: streaming ? "linear-gradient(135deg,#ef4444,#dc2626)" : undefined,
         }}
-        className="[background:linear-gradient(135deg,#3d7a8c,#1e4d5c)] dark:[background:linear-gradient(135deg,#9b7cf0,#5db8fe)]"
+        className={
+          streaming
+            ? ""
+            : "[background:linear-gradient(135deg,#3d7a8c,#1e4d5c)] dark:[background:linear-gradient(135deg,#9b7cf0,#5db8fe)]"
+        }
       >
-        {disabled ? (
-          <Loader2 size={15} color="#fff" className="animate-spin" />
+        {streaming ? (
+          <Square size={13} color="#fff" fill="#fff" />
         ) : (
           <Send size={14} color="#fff" />
         )}

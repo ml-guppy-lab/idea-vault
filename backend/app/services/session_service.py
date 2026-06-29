@@ -165,6 +165,8 @@ async def save_exchange(
     session_id: str,
     user_message: str,
     assistant_message: str,
+    *,
+    interrupted: bool = False,
 ) -> None:
     """
     Append one user→assistant exchange, fold old turns into the rolling summary
@@ -174,6 +176,10 @@ async def save_exchange(
     summarisation call never delays what the user sees. The TTL is refreshed on
     every write so an active conversation never expires while in use. Never
     raises — a persistence failure must not break the user's reply.
+
+    `interrupted=True` tags the assistant turn as a partial reply (the user hit
+    Stop mid-stream). The flag is stored so query rewriting can skip the
+    half-finished turn, while the rolling summary still folds it in as context.
     """
     if not session_id:
         return
@@ -182,9 +188,13 @@ async def save_exchange(
     if not user_message or not assistant_message:
         return
 
+    assistant_entry = {"role": "assistant", "content": assistant_message[:_MAX_CONTENT_CHARS]}
+    if interrupted:
+        assistant_entry["interrupted"] = True
+
     summary, messages = await _load(redis, user_id, session_id)
     messages.append({"role": "user", "content": user_message[:_MAX_CONTENT_CHARS]})
-    messages.append({"role": "assistant", "content": assistant_message[:_MAX_CONTENT_CHARS]})
+    messages.append(assistant_entry)
 
     # ── Rolling summary: fold the oldest turns once the history gets long ──────
     if len(messages) > _SUMMARY_TRIGGER_MESSAGES:

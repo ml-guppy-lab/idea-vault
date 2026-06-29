@@ -12,6 +12,8 @@ export interface Message {
   content: string;
   /** True while the SSE stream for this message is still open. */
   isStreaming?: boolean;
+  /** True when the user stopped generation mid-stream (partial reply). */
+  interrupted?: boolean;
 }
 
 // ── MessageBubble ─────────────────────────────────────────────────────────────
@@ -72,6 +74,23 @@ export default function MessageBubble({
           >
             <StreamingText text={message.content} isStreaming={!!message.isStreaming} />
           </div>
+        )}
+
+        {/* Subtle indicator when the user stopped this reply mid-generation. */}
+        {message.interrupted && (
+          <span
+            style={{
+              fontSize: "0.72rem",
+              fontWeight: 600,
+              color: isDark ? "#f0b048" : "#b45309",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              paddingLeft: "0.2rem",
+            }}
+          >
+            ⚠ Stopped
+          </span>
         )}
       </div>
     </div>

@@ -14,7 +14,7 @@ Event `type` values: status | thinking | text | done | error.
 
 import json
 import logging
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Awaitable, Callable, Optional
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 import redis.asyncio as aioredis
@@ -69,6 +69,7 @@ async def stream_rag_sse(
     history: Optional[list[dict]] = None,
     redis: Optional[aioredis.Redis] = None,
     session_id: Optional[str] = None,
+    is_disconnected: Optional[Callable[[], Awaitable[bool]]] = None,
 ) -> AsyncGenerator[str, None]:
     """
     Run the full RAG pipeline for one message and yield SSE record strings.
@@ -82,6 +83,10 @@ async def stream_rag_sse(
     - When `redis` + `session_id` are provided, the completed user→assistant
       exchange is persisted to the session (read endpoint only; the legacy
       /api/chat caller passes neither and so nothing is stored).
+    - `is_disconnected` (the request's disconnect check) lets us stop generating
+      the moment the user hits Stop / navigates away: we break the token loop,
+      which closes the upstream LLM stream so no more tokens are billed, and
+      persist whatever partial reply was produced (tagged `interrupted`).
     - Every step is guarded so any failure yields a typed `error` event instead
       of dropping the connection and leaving the client hanging.
     """
@@ -123,6 +128,7 @@ async def stream_rag_sse(
     # ── Step 3: Stream LLM response (history-aware) ───────────────────────────
     assistant_parts: list[str] = []
     saw_error = False
+    interrupted = False
     async for event in stream_rag_response(
         user_message=message, context=context, history=history
     ):
@@ -132,6 +138,24 @@ async def stream_rag_sse(
             saw_error = True
         yield format_sse(event)
 
-    # Persist only a clean, completed exchange so errors never pollute history.
-    if redis is not None and session_id and not saw_error:
-        await save_exchange(redis, user_id, session_id, message, "".join(assistant_parts))
+        # Client hung up (hit Stop / closed the tab). Stop pulling tokens from
+        # the LLM immediately — breaking closes the upstream stream so the rest
+        # of the response is never generated or billed.
+        if is_disconnected is not None and await is_disconnected():
+            interrupted = True
+            logger.info("[chat] client disconnected mid-stream; stopping user=%s", user_id)
+            break
+
+    # Persist the exchange. A clean, completed reply is saved normally; a partial
+    # reply (user hit Stop) is saved tagged `interrupted` so context stays
+    # coherent without letting a half-sentence pollute query rewriting. Errors
+    # and empty partials are never written.
+    if redis is not None and session_id:
+        partial = "".join(assistant_parts)
+        if interrupted:
+            if partial:
+                await save_exchange(
+                    redis, user_id, session_id, message, partial, interrupted=True
+                )
+        elif not saw_error:
+            await save_exchange(redis, user_id, session_id, message, partial)

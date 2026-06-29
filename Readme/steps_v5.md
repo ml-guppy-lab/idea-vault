@@ -815,6 +815,11 @@ Three pieces working together:
   reformulation already grounds the query so the classifier routes it correctly.
 - **History threads into both brains.** Recent turns are inserted between the system prompt and the
   new message for both the RAG answer and the agent loop, so follow-ups like *"now improve it"* work.
+- **Reuse the existing "Clear chat" button as the session reset — no separate "New Chat".** A
+  dedicated "New Chat" control implies past conversations are saved and switchable, which would
+  invite a chat-history list (explicitly out of scope for this project). One delete button keeps the
+  mental model unambiguous: there is one live conversation — clear it to start a fresh session
+  (resets `session_id` to null and wipes the thread).
 - **Backward compatible.** New params are all optional/keyword — the legacy `/api/chat` and
   `/api/agent` callers are unchanged and store nothing.
 
@@ -896,4 +901,70 @@ recent window, so the model still "remembers" the earlier topic while the prompt
 3. Ask about a topic from the *earliest* messages — the reply still reflects it, because the summary
    is injected as a leading system message (the prompt no longer carries those raw turns).
 4. The prompt size stays flat as the conversation grows past 10 messages — no context overflow.
+
+---
+
+## Stop generation (mid-stream cancellation)
+
+### The problem
+Once a reply started streaming, the user had to wait for it to finish — even if the first sentence
+already showed it was going the wrong way. Worse, on the free LLM tier every wasted token counts: a
+user abandoning a long answer still burns the full quota, because **the backend keeps generating even
+after the browser stops listening.**
+
+### The fix
+A **Stop button** that solves both halves of the problem:
+- **Frontend** — an `AbortController` is attached to the `fetch`. Hitting Stop aborts it, which
+  immediately stops reading the SSE stream and re-enables the input so the user can type again right
+  away. The partial reply stays on screen with a subtle **"⚠ Stopped"** badge.
+- **Backend** — the streaming generator polls `request.is_disconnected()` after every token. When the
+  client hangs up it **breaks the loop, closing the upstream LLM stream** so no further tokens are
+  generated or billed. Whatever partial text was produced is persisted, tagged `interrupted`.
+
+### Decisions (the careful parts)
+- **Stop the LLM, don't just hide it.** Cancelling only on the frontend would leave the backend
+  generating into the void on our dime. The real win is `is_disconnected()` breaking the server-side
+  token loop — that's what protects the OpenRouter quota.
+- **Detect disconnect *inside* the pipeline, not the route wrapper.** `is_disconnected` is passed into
+  `stream_rag_sse` as an injected async callable (same DI style as `redis`), so the pipeline that owns
+  the token loop is also the one that decides to stop and persist the partial — in one place, and
+  testable without a real `Request`.
+- **Persist the partial, tagged `interrupted`.** Redis is the server-side source of truth; saving the
+  half-reply keeps the next turn's context coherent. Empty partials (stopped before any token) and
+  errored streams are never saved.
+- **Exclude interrupted turns from query rewriting, keep them everywhere else.** A half-sentence makes
+  a *terrible* standalone search query, so `rewrite_query` skips `interrupted` turns. The rolling
+  summary still folds them in (incomplete context is still context), and they remain visible in the UI.
+- **Frontend and backend mark interruption independently.** The browser flags its local copy; the
+  backend flags Redis. They never need to exchange an "interrupted" signal — each store stays correct
+  on its own.
+- **Graceful degradation.** If `is_disconnected()` is unavailable on the host, the stream simply runs
+  to completion server-side; the frontend Stop still works. (Verify token usage actually drops on
+  Render before relying on the backend half.)
+- **Agent (write) path unchanged.** It returns a single JSON blob, not a stream — there is no
+  mid-flight token loop to interrupt, so Stop there just discards the (short, bounded) result.
+
+### Files changed
+- `backend/app/ai/chat_pipeline.py` — `stream_rag_sse` accepts `is_disconnected`; breaks the token
+  loop on disconnect and saves the partial with `interrupted=True`.
+- `backend/app/api/ai.py` — injects the Starlette `Request` and passes `http_request.is_disconnected`
+  into the stream.
+- `backend/app/services/session_service.py` — `save_exchange` gains an `interrupted` flag that tags
+  the assistant turn (`{"role":"assistant","content":..., "interrupted": true}`).
+- `backend/app/ai/query_rewriter.py` — skips `interrupted` turns when building rewrite context.
+- `frontend/components/chat/ChatInput.tsx` — `streaming`/`onStop` props; a red **Stop** (square)
+  button replaces Send while a response is in flight.
+- `frontend/components/chat/MessageBubble.tsx` — `interrupted` flag on `Message` + the "⚠ Stopped"
+  indicator.
+- `frontend/components/chat/UnifiedChatWindow.tsx` — `AbortController` ref, signal on the `fetch`,
+  `stopGeneration()` (marks/drops the partial), and `AbortError` swallowed so Stop shows no error.
+
+### How to verify it works
+1. Ask something that produces a long answer → a red **Stop** button appears while it streams.
+2. Click Stop → the stream halts instantly, the partial stays with a **"⚠ Stopped"** badge, and the
+   input is immediately usable again.
+3. Send a follow-up → it works normally; the interrupted half-sentence is **not** used to build the
+   retrieval query (check logs — no nonsensical rewrite).
+4. On Render, watch token usage: stopping a long generation should stop new tokens being billed
+   (confirms `is_disconnected()` is breaking the backend loop).
 
