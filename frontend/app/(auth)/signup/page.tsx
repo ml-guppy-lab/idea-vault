@@ -30,7 +30,10 @@ export default function SignupPage() {
 
       {/* Right: Media Section */}
       <section className="hidden lg:block lg:h-screen">
-        <SignupMediaPanel imageSrc="/ui-media/homepage2.png" />
+        <SignupMediaPanel
+          imageSrcLight="/ui-media/banner-dm.png"
+          imageSrcDark="/ui-media/banner-lm.png"
+        />
       </section>
     </div>
   );
