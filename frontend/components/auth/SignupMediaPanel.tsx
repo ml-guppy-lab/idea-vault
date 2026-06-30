@@ -21,14 +21,15 @@ export default function SignupMediaPanel({
       <div className="relative h-[74%] w-[74%] overflow-hidden rounded-2xl border border-slate-300 shadow-[0_20px_48px_rgba(15,23,42,0.22)] dark:border-slate-600 dark:shadow-[0_20px_50px_rgba(56,189,248,0.3),0_0_30px_rgba(56,189,248,0.15)]">
         {imageSrcLight && imageSrcDark ? (
           <>
-            {/* Theme-swapped banners — toggled purely with CSS (no JS, no flash). */}
+            {/* Theme-swapped banners — toggled purely with CSS (no JS, no flash).
+                Each slowly pans left↔right to reveal the full width of the shot. */}
             <div
-              className="absolute inset-0 h-full w-full bg-cover bg-center dark:hidden"
+              className="absolute inset-0 h-full w-full bg-cover animate-banner-pan dark:hidden"
               style={{ backgroundImage: `url('${imageSrcLight}')` }}
               aria-hidden="true"
             />
             <div
-              className="absolute inset-0 hidden h-full w-full bg-cover bg-center dark:block"
+              className="absolute inset-0 hidden h-full w-full bg-cover animate-banner-pan dark:block"
               style={{ backgroundImage: `url('${imageSrcDark}')` }}
               aria-hidden="true"
             />

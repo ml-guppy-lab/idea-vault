@@ -184,3 +184,20 @@
   from { opacity: 0; transform: translateY(12px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+/* Auth banner — slow horizontal pan so a wide screenshot reveals its full
+   breadth inside a narrow card. Pairs with `background-size: cover`, which
+   crops height (intentional) while the width overflows for the pan to scan. */
+@keyframes banner-pan {
+  from { background-position: left center; }
+  to   { background-position: right center; }
+}
+.animate-banner-pan {
+  animation: banner-pan 16s ease-in-out infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-banner-pan {
+    animation: none;
+    background-position: center;
+  }
+}
