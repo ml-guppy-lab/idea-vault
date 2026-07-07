@@ -17,9 +17,10 @@ import logging
 import re
 from typing import Optional
 
-from openai import AsyncOpenAI, RateLimitError
+from openai import RateLimitError
 
-from app.core.llm_config import LLMProvider, llm_config
+from app.core.llm_client import create_chat_completion
+from app.core.llm_config import LLMProvider, ModelTier, llm_config
 
 logger = logging.getLogger("app.chat")
 
@@ -56,27 +57,17 @@ async def summarize_history(
     blocks.append(f"New messages to fold in:\n{convo}")
     user_block = "\n\n".join(blocks) + "\n\nUpdated summary:"
 
-    client = AsyncOpenAI(
-        base_url=llm_config.base_url,
-        api_key=llm_config.api_key,
-        default_headers=llm_config.extra_headers,
-    )
-
-    kwargs: dict = {
-        "model": llm_config.classifier_model,
-        "messages": [
-            {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
-            {"role": "user", "content": user_block},
-        ],
-        "max_tokens": None if llm_config.provider == LLMProvider.ollama else 160,
-        "temperature": 0,
-        "stream": False,
-    }
-    if llm_config.provider == LLMProvider.ollama:
-        kwargs["extra_body"] = {"think": False}
-
+    # FAST-tier chain (Cerebras → Groq → OpenRouter) with cross-provider failover.
     try:
-        response = await client.chat.completions.create(**kwargs)
+        response = await create_chat_completion(
+            [
+                {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+                {"role": "user", "content": user_block},
+            ],
+            tier=ModelTier.FAST,
+            max_tokens=None if llm_config.provider == LLMProvider.ollama else 160,
+            temperature=0,
+        )
     except RateLimitError:
         logger.warning("[summary] classifier rate-limited; keeping messages unsummarised")
         return None

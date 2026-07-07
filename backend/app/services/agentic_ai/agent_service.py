@@ -1,16 +1,18 @@
 import asyncio
 import json
 import logging
+import re
 import uuid
+from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Any
 
 from bson import ObjectId
 from fastapi import BackgroundTasks
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from openai import AsyncOpenAI, RateLimitError
 
-from app.core.llm_config import llm_config
+from app.core.llm_client import create_chat_completion
+from app.core.llm_config import ModelTier, llm_config
 from app.db.mongodb import get_mongo_db
 from app.schemas.agent import (
 	AgentResponse,
@@ -48,22 +50,48 @@ The user's ideas will be provided to you via the search_ideas tool.
 """ + STRICT_GUARDRAILS
 
 
-def _to_openai_tool_calls(tool_calls: Any) -> list[dict[str, Any]]:
-	"""Convert OpenAI tool call objects into plain dicts for message history."""
-	# The SDK returns rich objects, but the next LLM call expects JSON-like dicts.
-	serialised: list[dict[str, Any]] = []
-	for tc in tool_calls:
-		serialised.append(
-			{
-				"id": tc.id,
-				"type": "function",
-				"function": {
-					"name": tc.function.name,
-					"arguments": tc.function.arguments,
-				},
-			}
-		)
-	return serialised
+# Some models/providers emit tool calls as inline TEXT instead of the structured
+# `tool_calls` field, e.g.:
+#   <function(propose_idea_creation)>{"title": "...", ...}</function>
+# Left unhandled, that raw markup leaks into the chat as the assistant's reply.
+# This regex recovers those calls so the agent still produces proposals. It
+# matches both <function(name)> and <function=name> variants and captures the
+# JSON body between the opening tag and </function>.
+_TEXT_TOOL_CALL_RE = re.compile(
+	r"<function[=(]\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\)?\s*>\s*(\{.*?\})\s*</function>",
+	re.DOTALL,
+)
+
+# Normalised tool call — a common shape for both structured and text-parsed calls.
+_ToolCall = namedtuple("_ToolCall", ["id", "name", "arguments"])
+
+
+def _extract_text_tool_calls(content: str) -> list[_ToolCall]:
+	"""Recover tool calls a model emitted as inline text (see _TEXT_TOOL_CALL_RE)."""
+	calls: list[_ToolCall] = []
+	for i, match in enumerate(_TEXT_TOOL_CALL_RE.finditer(content or "")):
+		calls.append(_ToolCall(id=f"text_call_{i}", name=match.group(1), arguments=match.group(2)))
+	return calls
+
+
+def _strip_function_text(content: str) -> str:
+	"""Remove inline <function(...)>...</function> blocks from assistant text."""
+	return _TEXT_TOOL_CALL_RE.sub("", content or "").strip()
+
+
+def _normalize_tool_calls(choice: Any) -> tuple[list[_ToolCall], bool]:
+	"""Return (calls, from_text).
+
+	Prefers the provider's structured tool_calls; if absent, falls back to
+	parsing inline function-call text from the message content. `from_text` is
+	True when the calls were recovered from text so the caller can strip the raw
+	markup from the visible reply.
+	"""
+	structured = getattr(choice.message, "tool_calls", None)
+	if structured:
+		return ([_ToolCall(tc.id, tc.function.name, tc.function.arguments) for tc in structured], False)
+	parsed = _extract_text_tool_calls(getattr(choice.message, "content", "") or "")
+	return (parsed, True) if parsed else ([], False)
 
 
 def _safe_json_loads(raw: str) -> dict[str, Any]:
@@ -102,44 +130,25 @@ def _serialize_for_json(obj: Any) -> Any:
 
 
 async def _create_completion_with_fallback(
-	client: AsyncOpenAI,
 	*,
 	messages: list[dict[str, Any]],
 	tools: list[dict[str, Any]] | None = None,
 	tool_choice: str | None = None,
 	max_tokens: int,
 ) -> Any:
-	"""Retry transient 429s, then switch to the configured fallback model."""
-	request_kwargs: dict[str, Any] = {
-		"messages": messages,
-		"max_tokens": max_tokens,
-	}
+	"""Agent completion with cross-provider failover.
+
+	Delegates to create_chat_completion, which walks the provider chain
+	(Cerebras → Groq → OpenRouter) on the STANDARD tier, spilling over on
+	rate-limit/5xx. The agent relies on tool calling, so the STANDARD-tier
+	models (llama-3.3-70b class) are used — they support function calling.
+	"""
+	request_kwargs: dict[str, Any] = {"max_tokens": max_tokens}
 	if tools is not None:
 		request_kwargs["tools"] = tools
 	if tool_choice is not None:
 		request_kwargs["tool_choice"] = tool_choice
-
-	last_exc: RateLimitError | None = None
-	for attempt in range(1, 4):
-		try:
-			return await client.chat.completions.create(
-				model=llm_config.model,
-				**request_kwargs,
-			)
-		except RateLimitError as exc:
-			last_exc = exc
-			if attempt < 3:
-				await asyncio.sleep(2 ** attempt)
-
-	fallback = llm_config.fallback_model
-	if fallback:
-		logger.warning("Primary agent model rate-limited; retrying with fallback model %s", fallback)
-		return await client.chat.completions.create(
-			model=fallback,
-			**request_kwargs,
-		)
-
-	raise last_exc  # type: ignore[misc]
+	return await create_chat_completion(messages, tier=ModelTier.STANDARD, **request_kwargs)
 
 
 async def run_agent(
@@ -154,12 +163,6 @@ async def run_agent(
 	- Converts write tools into proposals (never writes DB here).
 	- Returns assistant text + pending proposals.
 	"""
-	client = AsyncOpenAI(
-		base_url=llm_config.base_url,
-		api_key=llm_config.api_key,
-		default_headers=llm_config.extra_headers,
-	)
-
 	# Conversation state sent back to the model on each iteration. Prior turns
 	# (already windowed by the caller) give the agent context for follow-ups like
 	# "now improve it" — inserted between the system prompt and the new message. A
@@ -181,7 +184,6 @@ async def run_agent(
 	for _ in range(3):
 		# 1) Ask model what to do (plain answer vs. tool calls).
 		response = await _create_completion_with_fallback(
-			client,
 			messages=messages,
 			tools=AGENT_TOOLS,
 			tool_choice="auto",
@@ -201,89 +203,100 @@ async def run_agent(
 			break
 
 		choice = choices[0]
+		calls, from_text = _normalize_tool_calls(choice)
 
-		if choice.finish_reason == "stop":
-			# Model answered directly with text. End the loop.
-			final_message = choice.message.content or ""
+		if not calls:
+			# Model answered directly with text. Strip any stray function markup
+			# just in case, so partial/garbled tool syntax never leaks to the user.
+			cleaned = _strip_function_text(choice.message.content or "")
+			final_message = cleaned or (choice.message.content or "")
 			break
 
-		if choice.finish_reason == "tool_calls" and choice.message.tool_calls:
-			# 2) Save assistant tool-call step into history before executing tools.
-			messages.append(
+		# 2) Save the assistant tool-call step into history before executing tools.
+		# For text-parsed calls we strip the raw function markup from the visible
+		# content so it never appears in the reply.
+		assistant_content = choice.message.content or ""
+		if from_text:
+			assistant_content = _strip_function_text(assistant_content)
+		messages.append(
+			{
+				"role": "assistant",
+				"content": assistant_content,
+				"tool_calls": [
+					{
+						"id": c.id,
+						"type": "function",
+						"function": {"name": c.name, "arguments": c.arguments},
+					}
+					for c in calls
+				],
+			}
+		)
+
+		tool_results: list[dict[str, Any]] = []
+		for call in calls:
+			tool_name = call.name
+			args = _safe_json_loads(call.arguments)
+
+			if tool_name in READ_ONLY_TOOLS:
+				# Read tool path: execute immediately and return data to model.
+				result = await _execute_read_tool(tool_name, args, user_id, db)
+				tool_results.append(
+					{"tool_call_id": call.id, "role": "tool", "content": json.dumps(result)}
+				)
+				continue
+
+			if tool_name in PROPOSAL_TOOLS:
+				try:
+					# Write tool path: create proposal object only (no DB writes).
+					proposal = _build_proposal(tool_name, args)
+					proposals.append(proposal)
+					tool_results.append(
+						{
+							"tool_call_id": call.id,
+							"role": "tool",
+							"content": json.dumps(
+								{"status": "proposal_created", "proposal_id": proposal.proposal_id}
+							),
+						}
+					)
+				except Exception as exc:
+					logger.exception("Failed building proposal for tool %s", tool_name)
+					tool_results.append(
+						{
+							"tool_call_id": call.id,
+							"role": "tool",
+							"content": json.dumps(
+								{"status": "error", "error": f"invalid_proposal_args: {exc}"}
+							),
+						}
+					)
+				continue
+
+			# Unknown tool name: return explicit error so the model can self-correct.
+			tool_results.append(
 				{
-					"role": "assistant",
-					"content": choice.message.content or "",
-					"tool_calls": _to_openai_tool_calls(choice.message.tool_calls),
+					"tool_call_id": call.id,
+					"role": "tool",
+					"content": json.dumps({"status": "error", "error": "unknown_tool"}),
 				}
 			)
 
-			tool_results: list[dict[str, Any]] = []
-			for tool_call in choice.message.tool_calls:
-				tool_name = tool_call.function.name
-				args = _safe_json_loads(tool_call.function.arguments)
+		# 3) Feed tool outputs back to the model for the next reasoning step.
+		messages.extend(tool_results)
 
-				if tool_name in READ_ONLY_TOOLS:
-					# Read tool path: execute immediately and return data to model.
-					result = await _execute_read_tool(tool_name, args, user_id, db)
-					tool_results.append(
-						{
-							"tool_call_id": tool_call.id,
-							"role": "tool",
-							"content": json.dumps(result),
-						}
-					)
-					continue
-
-				if tool_name in PROPOSAL_TOOLS:
-					try:
-						# Write tool path: create proposal object only (no DB writes).
-						proposal = _build_proposal(tool_name, args)
-						proposals.append(proposal)
-						tool_results.append(
-							{
-								"tool_call_id": tool_call.id,
-								"role": "tool",
-								"content": json.dumps(
-									{
-										"status": "proposal_created",
-										"proposal_id": proposal.proposal_id,
-									}
-								),
-							}
-						)
-					except Exception as exc:
-						logger.exception("Failed building proposal for tool %s", tool_name)
-						tool_results.append(
-							{
-								"tool_call_id": tool_call.id,
-								"role": "tool",
-								"content": json.dumps(
-									{
-										"status": "error",
-										"error": f"invalid_proposal_args: {exc}",
-									}
-								),
-							}
-						)
-					continue
-
-				# Unknown tool name: return explicit error so the model can self-correct.
-				tool_results.append(
-					{
-						"tool_call_id": tool_call.id,
-						"role": "tool",
-						"content": json.dumps({"status": "error", "error": "unknown_tool"}),
-					}
+		only_proposals = all(c.name in PROPOSAL_TOOLS for c in calls)
+		if only_proposals:
+			if from_text:
+				# The text-mode model already emitted the proposals. Asking it to
+				# summarise risks it re-emitting raw function markup, so reuse its
+				# non-function prose (if any) or a safe default — no extra LLM call.
+				final_message = assistant_content.strip() or (
+					"I reviewed your request and prepared these suggestions for you to review."
 				)
-
-			# 3) Feed tool outputs back to the model for next reasoning step.
-			messages.extend(tool_results)
-
-			only_proposals = all(tc.function.name in PROPOSAL_TOOLS for tc in choice.message.tool_calls)
-			if only_proposals:
-				# If no read-tools were needed, ask model for a concise user-facing summary.
+			else:
+				# Structured path — ask the model for a concise user-facing summary.
 				summary = await _create_completion_with_fallback(
-					client,
 					messages=messages
 					+ [
 						{
@@ -298,12 +311,11 @@ async def run_agent(
 					final_message = summary_choices[0].message.content or ""
 				else:
 					logger.warning(
-						"Agent summary completion returned no choices (model=%s, user_id=%s).",
-						llm_config.model,
+						"Agent summary completion returned no choices (user_id=%s).",
 						user_id,
 					)
 					final_message = "I reviewed your request and prepared suggestions."
-				break
+			break
 
 	if not final_message:
 		# Safety fallback so API contract always returns a non-empty message.

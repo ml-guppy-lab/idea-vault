@@ -25,9 +25,10 @@ Usage:
 from typing import AsyncGenerator
 import logging
 
-from openai import AsyncOpenAI, RateLimitError
+from openai import RateLimitError
 
-from app.core.llm_config import LLMProvider, ModelTier, llm_config, select_tier_for_intent
+from app.core.llm_client import create_chat_stream
+from app.core.llm_config import select_tier_for_intent
 from app.services.intent_classifier import SCOPE_REFUSAL, STRICT_GUARDRAILS
 
 logger = logging.getLogger(__name__)
@@ -202,28 +203,23 @@ async def stream_rag_response(
     messages.append({"role": "user", "content": user_message[:_MAX_USER_MSG_CHARS]})
 
     # ── Step 2: Select model tier based on intent ─────────────────────────────
-    # FAST tier (llama3.2:3b / llama-3.2-3b-instruct) — greetings, listing, counts.
-    # STANDARD tier (qwen3:14b / gemma-4-31b) — semantic search needs real reasoning.
+    # FAST tier — greetings, listing, counts (no reasoning needed).
+    # STANDARD tier — semantic search needs real reasoning over idea content.
     tier = select_tier_for_intent(context["intent"])
-    model = llm_config.model_for_tier(tier)
-    logger.info("[rag] intent=%s tier=%s model=%s", context["intent"], tier.value, model)
+    logger.info("[rag] intent=%s tier=%s", context["intent"], tier.value)
 
-    # ── Step 3: Call LLM and stream tokens ────────────────────────────────────
-    client = AsyncOpenAI(
-        base_url=llm_config.base_url,
-        api_key=llm_config.api_key,
-        default_headers=llm_config.extra_headers,
-    )
-
-    # Thinking/reasoning tokens disabled for all providers — adds latency without
-    # user-visible benefit. Ollama: think=false suppresses chain-of-thought entirely.
-    # OpenRouter: omitting include_reasoning means no reasoning_content is sent.
-    extra_params: dict = {}
-    if llm_config.provider == LLMProvider.ollama:
-        extra_params["extra_body"] = {"think": False}
-
+    # ── Step 3: Call the LLM with cross-provider failover and stream tokens ────
+    # create_chat_stream walks the provider chain (Cerebras → Groq → OpenRouter),
+    # spilling over on rate-limit/5xx, and returns the first accepted stream.
+    # Provider-specific params (e.g. Ollama's think=False) are applied per
+    # endpoint inside the executor, so nothing provider-specific is needed here.
     try:
-        stream = await _create_stream_with_fallback(client, messages, extra_params, model)
+        stream = await create_chat_stream(
+            messages,
+            tier=tier,
+            max_tokens=2000,  # enough headroom for the reply
+            temperature=0.7,  # 0=deterministic, 1=creative; 0.7 balances both
+        )
     except RateLimitError:
         yield {"type": "error", "content": "LLM is temporarily unavailable. Please try again in a moment."}
         return
@@ -241,49 +237,3 @@ async def stream_rag_response(
             yield {"type": "text", "content": delta.content}
 
     yield {"type": "done", "content": ""}
-
-
-async def _create_stream_with_fallback(
-    client: AsyncOpenAI,
-    messages: list[dict],
-    extra_params: dict,
-    model: str,
-):
-    """
-    Attempt to create a streaming completion with the tier-selected model.
-    On 429, retry with exponential backoff then switch to the fallback model.
-
-    Separated from stream_rag_response so the generator itself stays clean —
-    we can't use try/except around `yield` in the same function in Python.
-    """
-    last_exc: RateLimitError | None = None
-
-    for attempt in range(1, 4):  # 3 attempts: 2s, 4s, 8s
-        try:
-            return await client.chat.completions.create(
-                model=model,
-                messages=messages,
-                stream=True,
-                max_tokens=2000,  # enough headroom for thinking + reply
-                temperature=0.7,  # 0=deterministic, 1=creative; 0.7 balances both
-                **extra_params,
-            )
-        except RateLimitError as exc:
-            last_exc = exc
-            if attempt < 3:
-                import asyncio  # noqa: PLC0415
-                await asyncio.sleep(2 ** attempt)
-
-    # All retries exhausted — try fallback model (OpenRouter only)
-    fallback = llm_config.fallback_model
-    if fallback:
-        return await client.chat.completions.create(
-            model=fallback,
-            messages=messages,
-            stream=True,
-            max_tokens=2000,
-            temperature=0.7,
-            **extra_params,
-        )
-
-    raise last_exc  # type: ignore[misc]

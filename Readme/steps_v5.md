@@ -1126,3 +1126,134 @@ transactional web app deployed to a managed host, that's the stronger choice:
    to `False`, and uncomment the login gate.
 3. `frontend/components/auth/SignupForm.tsx` — set `EMAIL_VERIFICATION_ENABLED = true`.
 
+---
+
+## Cross-Provider LLM Failover (beating free-tier rate limits)
+
+### The problem
+The app runs entirely on **free LLM tiers** to stay zero-cost, and free tiers rate-limit. OpenRouter
+(our original provider) throttles at the **account** level across all models, and individual models
+add their own caps on top. When a limit is hit the provider returns **HTTP 429** and the user sees an
+error instead of an answer — the worst possible moment during a live portfolio demo. Relying on a
+single provider makes that a matter of *when*, not *if*.
+
+### The fix
+An ordered **failover chain** of providers, tried until one answers. All three — Cerebras, Groq,
+OpenRouter — expose an OpenAI-compatible API, so the same `AsyncOpenAI` client works for each; only the
+base URL, key, and model change. A new module `app/core/llm_client.py` exposes two entry points —
+`create_chat_stream` (streaming RAG answer) and `create_chat_completion` (everything non-streaming) —
+that walk the chain for the requested tier, spilling over to the next provider on failure and raising
+only when all are exhausted. The order is **Cerebras → Groq → OpenRouter**, and each tier keeps its own
+chain of tier-appropriate models:
+
+| Tier | Cerebras | Groq | OpenRouter | Used for |
+|---|---|---|---|---|
+| **FAST** | `llama3.1-8b` | `llama-3.1-8b-instant` | `gpt-oss-20b:free` | greetings, listing, counts, intent classification, query rewriting, summarising |
+| **STANDARD** | `llama-3.3-70b` | `llama-3.3-70b-versatile` | `gemma-4-31b:free` | semantic-search answers, the agent |
+
+### Decisions
+- **Build it, don't add LiteLLM.** Because every provider is already OpenAI-compatible, the whole thing
+  is ~60 lines on the client we already use — lighter and clearer than adopting a framework to hide them
+  (matches the charter's "simple, explicit code over clever abstractions").
+- **Order = fastest and most generous first.** Cerebras and Groq run on custom inference hardware with
+  generous free tiers. Crucially they are *separate accounts*, so their rate limits are independent
+  buckets — free capacity **stacks** instead of sharing one ceiling. OpenRouter goes last as the broad
+  backstop (widest model catalog).
+- **Fail fast, don't sleep.** The old single-provider fallback retried the same model with 2s/4s/8s
+  backoff. With independent providers that's wrong — if Cerebras just 429'd, another provider almost
+  certainly has capacity *now* — so the chain fails over immediately with no per-provider backoff. More
+  resilient *and* faster.
+- **Fail over on provider problems only.** 429 / timeout / connection / 5xx / empty `choices` advance to
+  the next provider; a **400 (bad request)** is *our* bug and is allowed to surface rather than be masked
+  by an identical failure elsewhere.
+- **Streaming fails over at connect time only.** 429s surface when the stream is opened, before any
+  token — safe to switch there. A rare mid-stream drop just ends that reply; we never restart half an
+  answer.
+- **Agent stays on tool-capable models.** The agent uses tool calling, which not every free model
+  supports. The STANDARD-tier 70B models (Cerebras/Groq `llama-3.3-70b`) do, so the agent runs on
+  STANDARD — a requirement, not a coincidence.
+- **Centralize, delete duplication.** Five call sites (RAG stream, agent, classifier, rewriter,
+  summarizer) each built their own client and fallback logic. All now route through the one executor —
+  one behaviour, one place (DRY).
+- **Quirks live on the endpoint.** Ollama needs `extra_body={"think": False}`; cloud providers reject
+  it. Each endpoint carries its own params so callers stay provider-agnostic, and local Ollama dev keeps
+  working unchanged (its "chain" is a single endpoint).
+- **Graceful degradation + safe keys.** Keys stay in env, are never logged, and only providers with a
+  key set join the chain (enable one or all three). If every provider is exhausted the small helpers
+  degrade — classifier → `SEMANTIC_SEARCH`, rewriter/summarizer → original text — so the user never sees
+  a stack trace.
+
+### Files changed
+- `backend/app/core/llm_client.py` *(new)* — the failover executor: `LLMEndpoint`, `_resolve_chain`
+  (per-tier chain), `create_chat_completion` (non-stream) and `create_chat_stream` (stream).
+- `backend/app/core/config.py` — added `GROQ_API_KEY`, `CEREBRAS_API_KEY`, and the four
+  `LLM_GROQ_MODEL_*` / `LLM_CEREBRAS_MODEL_*` settings (env-overridable).
+- `backend/app/services/rag_service.py` — the streaming answer calls `create_chat_stream`; the old
+  `_create_stream_with_fallback` helper was removed.
+- `backend/app/services/agentic_ai/agent_service.py` — the agent routes through `create_chat_completion`
+  on the STANDARD (tool-capable) tier; its per-call client and old retry helper were removed.
+- `backend/app/services/intent_classifier.py`, `backend/app/ai/query_rewriter.py`,
+  `backend/app/ai/history_summarizer.py` — each calls `create_chat_completion` on the FAST tier; the
+  classifier also degrades to `SEMANTIC_SEARCH` if all providers fail.
+- Configuration is env-only (loaded via `env_file` in docker-compose): set `LLM_PROVIDER=openrouter` to
+  activate the chain, plus `CEREBRAS_API_KEY` / `GROQ_API_KEY` / `OPENROUTER_API_KEY`; set
+  `LLM_PROVIDER=ollama` to bypass the chain for local dev.
+
+### How to verify it works
+1. With all three keys set, the STANDARD chain resolves to `[cerebras, groq, openrouter]` and FAST to
+   the three small models; remove a key and that provider drops out of the chain automatically.
+2. Simulate a 429 on Cerebras → the request is transparently served by Groq and a `trying next provider`
+   line is logged (verified with a unit test that raises `RateLimitError` for Cerebras).
+3. With `LLM_PROVIDER=ollama`, the chain is a single Ollama endpoint with `think=False` — no cloud
+   calls, behaviour identical to before.
+4. With no valid keys, the helper calls degrade (classifier → `SEMANTIC_SEARCH`, rewriter/summarizer →
+   original text) instead of raising.
+5. Note: free-tier providers occasionally rename/retire models — a 404 means the model name changed;
+   update the relevant `LLM_*_MODEL_*` value in `config.py` (env-overridable, no code change needed).
+
+---
+
+## Agent Tool Calls Emitted as Text (cross-provider fix)
+
+### The problem
+After moving the agent onto the failover chain, asking it to create or update something dumped raw
+markup into the chat instead of showing a proposal card — e.g.
+`<function(propose_idea_creation)>{...}</function>`. The new STANDARD-tier models (Cerebras/Groq
+`llama-3.3-70b`) express tool calls as **inline text** rather than the OpenAI structured `tool_calls`
+field. The agent loop only recognised structured calls, so it fell through to "model answered with
+text" and returned the markup verbatim.
+
+### The fix
+Make the agent **provider-agnostic** about how a tool call arrives. A new `_normalize_tool_calls()`
+prefers the structured `tool_calls`, and when absent, recovers calls from the message text with
+`_extract_text_tool_calls()` (a regex handling both `<function(name)>` and `<function=name>` forms, and
+multiple calls). The loop now works off a normalised `(id, name, arguments)` list, so text-emitted and
+structured calls flow through the *same* proposal-building path. `_strip_function_text()` scrubs the raw
+markup from the visible reply so nothing leaks even in edge cases.
+
+### Decisions
+- **Parse text calls rather than restrict providers.** A text parser keeps the failover benefit and
+  works no matter which provider serves the turn — a provider-agnostic fix beats pinning the agent to
+  one model.
+- **Detect by presence of calls, not `finish_reason`.** Text-mode models often return
+  `finish_reason="stop"` even while emitting a tool call, so routing now keys off whether any call was
+  found (structured or parsed), not the finish reason.
+- **No re-summarise on the text path.** For text-mode proposals, asking the model for a closing summary
+  risks it re-emitting raw markup, so the agent reuses its non-function prose (or a safe default) with no
+  extra LLM call.
+- **Reuse the existing proposal builder.** Parsed args feed the same `_build_proposal`, which picks known
+  fields — so extra keys the model includes (like `reasoning`) are handled exactly as before.
+
+### Files changed
+- `backend/app/services/agentic_ai/agent_service.py` — added `_extract_text_tool_calls`,
+  `_strip_function_text`, `_normalize_tool_calls` and a `_ToolCall` shape; rewrote the tool-handling loop
+  to consume normalised calls from either source; removed the now-unused `_to_openai_tool_calls`.
+
+### How to verify it works
+1. Ask "create an idea about a RAG movie-recommendation project" → a proper **proposal card** appears
+   (Accept/Reject), not raw `<function...>` text.
+2. Unit check: the exact leaked payload parses into an `IdeaCreationProposal` (title/status/tags
+   correct); the `<function=name>` and multi-call variants also parse; `_strip_function_text` removes all
+   markup.
+3. A plain question ("what are my ideas?") still returns normal text with no proposals.
+
