@@ -1036,3 +1036,93 @@ A lightweight, **metadata-aware ranking** step that runs after retrieval:
    idea at `0.95` (→`0.57`) and an abandoned one at `0.90` (→`0.45`); the completed-query detector scores
    the four phrasings above as `False / True / True / False` respectively.
 
+---
+
+## Email Verification: Temporarily Disabled (and Why Resend, not SMTP)
+
+### The problem
+Two things collided:
+1. **No paid domain yet.** Transactional email providers only deliver to arbitrary inboxes once you
+   verify a real sending **domain**. Without one, every verification link was being routed to a personal
+   inbox (via the dev override) instead of the actual user — not something acceptable in production.
+2. **A hard login gate.** New local accounts were created `email_verified=False` and the login route
+   blocked them until they clicked a link that, in this pre-domain state, they'd never usefully receive.
+   The result: a user could sign up but never get in.
+
+This is a resume/portfolio project, so the pragmatic call was to **defer** email verification (buy a
+domain later) rather than let a half-wired email flow block the core signup experience today.
+
+### The fix
+Email verification is switched **off** end-to-end, but every piece is preserved so it can be switched
+back on in minutes once a domain exists:
+- **Signup creates pre-verified accounts.** `register()` now sets `email_verified=True`, generates no
+  token, and sends no email — so registration simply creates a usable account.
+- **Login gate lifted.** The "please verify your email" 403 check in `login()` is commented out so any
+  account (including any legacy unverified rows) can sign in.
+- **Frontend skips the "check your email" screen.** A single flag `EMAIL_VERIFICATION_ENABLED = false`
+  in `SignupForm.tsx` redirects a successful signup straight to `/login`; the entire check-email/resend
+  UI is left intact behind the flag.
+
+### Why comment the code out instead of deleting it
+- **This is a "not yet", not a "never".** The email flow is correct and fully built — it's blocked only
+  by an external dependency (a domain). Deleting working code you intend to restore just means rewriting
+  and re-testing it later.
+- **Reversibility is a one-liner.** Re-enabling is: flip `EMAIL_VERIFICATION_ENABLED` to `true`, and
+  uncomment the token/email lines + login gate (each marked with an `EMAIL VERIFICATION TEMPORARILY
+  DISABLED` banner). No logic has to be reconstructed from memory.
+- **The commented lines are living documentation.** They show the *exact* wiring that must come back,
+  so future-me (or a reviewer) sees precisely what "on" looks like.
+- **Endpoints stay put.** `/auth/verify-email` and `/auth/resend-verification` are untouched — harmless
+  while unused, and part of what re-activates. Google OAuth is unaffected (its users are pre-verified).
+
+### Why Resend (HTTPS API) instead of raw SMTP
+The email layer uses **Resend's async API** (`send_async`, backed by httpx), not hand-rolled SMTP. For a
+transactional web app deployed to a managed host, that's the stronger choice:
+- **Deliverability.** Sending SMTP from an unknown server IP lands in spam or is dropped. Resend sends
+  from warmed, reputation-managed IPs and handles **SPF/DKIM/DMARC** for you — mail actually reaches the
+  inbox once the domain is verified.
+- **It's one HTTPS `POST`, not a stateful protocol.** SMTP is a chatty, multi-round-trip conversation
+  (HELO → MAIL FROM → RCPT TO → DATA) with connection pooling, TLS and timeouts to manage. Resend is a
+  single async call that drops cleanly into the existing `BackgroundTasks` pattern.
+- **Ports.** Managed hosts (Render included) **block outbound port 25** and throttle 587/465 to curb
+  spam. Resend rides **443 (HTTPS)**, which is never blocked — so it works in production without begging
+  support to open ports.
+- **Observability & retries.** SMTP gives a cryptic status and no history. Resend provides a dashboard +
+  webhooks (delivered / bounced / complained) and automatic retries — the "observable failures" the
+  engineering charter asks for.
+- **Secrets.** SMTP needs long-lived user/password credentials in the app; Resend uses a **scoped,
+  rotatable API key** (send-only), shrinking the blast radius if leaked.
+
+### Decisions
+- **Defer, don't half-ship.** A verification flow that can't deliver is worse than no gate at all — it
+  locks real users out. Disabling it cleanly beats leaving a broken gate in the login path.
+- **Provider behind a thin wrapper.** All sending lives in `email_service.py` (`send_verification_email`
+  / `send_password_reset_email`), so swapping Resend for SES/Postmark later — or re-enabling — is a
+  single-file change; the auth routes never touch the provider directly.
+- **Dev override is intentional.** `EMAIL_OVERRIDE_TO` routes all mail to the Resend account owner in
+  development (the only address deliverable without a verified domain); it's empty in production. This is
+  exactly the constraint that motivated deferring verification.
+- **Accept the trade-off.** Resend adds a vendor dependency and a free-tier cap, mitigated by the wrapper
+  boundary above — a fair price for inbox deliverability you can actually prove.
+
+### Files changed
+- `backend/app/api/auth.py` — `register()` creates pre-verified accounts (token/email lines commented);
+  the `login()` email-verification 403 gate commented out; each block flagged for easy restoration.
+- `frontend/components/auth/SignupForm.tsx` — added `EMAIL_VERIFICATION_ENABLED` flag; successful signup
+  redirects to `/login` while off. The check-email/resend UI is preserved intact.
+- *(unchanged, kept for later)* `backend/app/services/email_service.py` (Resend async wrapper),
+  `/auth/verify-email`, `/auth/resend-verification`.
+
+### How to verify it works
+1. Sign up with a new email → you are taken straight to `/login`, no "check your email" screen, and **no
+   email is sent** to any inbox.
+2. Log in with those credentials immediately → success (the verification gate no longer blocks you).
+3. Google OAuth sign-in still works and is pre-verified as before.
+
+### How to re-enable (once a domain is owned)
+1. Verify the sending domain at `https://resend.com/domains` and set `EMAIL_FROM` to the verified address;
+   clear `EMAIL_OVERRIDE_TO`.
+2. `backend/app/api/auth.py` — uncomment the token/email lines in `register()`, set `email_verified` back
+   to `False`, and uncomment the login gate.
+3. `frontend/components/auth/SignupForm.tsx` — set `EMAIL_VERIFICATION_ENABLED = true`.
+
