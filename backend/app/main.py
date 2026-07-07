@@ -41,6 +41,25 @@ from app.db.redis import close_redis_connection, connect_to_redis
 from app.models import user, refresh_token  # noqa: F401
 
 
+# ── Sentry error tracking — inert unless SENTRY_DSN is set ─────────────────────
+# Initialised before the app is created so it wraps startup and every request.
+# FastAPI/Starlette integrations are auto-enabled by sentry-sdk. We never send
+# PII (send_default_pii=False) so tokens, cookies, and request bodies stay out.
+if settings.SENTRY_DSN:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        environment=settings.SENTRY_ENVIRONMENT,
+        release=settings.SENTRY_RELEASE or None,
+        # Performance tracing (enables frontend→backend distributed traces).
+        traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
+        # Never ship request bodies, cookies, or user PII to Sentry.
+        send_default_pii=False,
+    )
+    _app_log.info("Sentry initialised (environment=%s)", settings.SENTRY_ENVIRONMENT)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Configure Cloudinary before any request can reach the image upload endpoint.
@@ -95,3 +114,12 @@ app.include_router(collections.router, prefix="/api")
 @app.get("/health", tags=["health"])
 async def health_check():
     return {"status": "ok", "version": settings.APP_VERSION}
+
+
+# Temporary endpoint to confirm errors reach Sentry. Only mounted in DEBUG mode
+# (never in production). Hitting it raises on purpose; remove once verified.
+if settings.DEBUG:
+
+    @app.get("/api/debug/sentry-test", include_in_schema=False)
+    async def _sentry_test():
+        raise RuntimeError("Sentry test error — intentional, safe to ignore.")

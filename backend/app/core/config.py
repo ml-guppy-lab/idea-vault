@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
 
+    # Observability — Sentry error tracking. Fully inert when SENTRY_DSN is empty,
+    # so local dev and tests are unaffected until a DSN is provided (e.g. on Render).
+    SENTRY_DSN: str = ""
+    SENTRY_ENVIRONMENT: str = "development"
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.1
+    SENTRY_RELEASE: str = ""
+
     # Database (PostgreSQL)
     DATABASE_URL: str = "postgresql+asyncpg://idea_user:idea_pass@localhost:5432/idea_vault_auth"
 

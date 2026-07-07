@@ -35,3 +35,6 @@ huggingface_hub>=0.24.0      # Hugging Face InferenceClient for hosted embedding
 numpy>=1.26.0                # Required by huggingface_hub feature_extraction() for embeddings
 
 certifi>=2024.6.0             # SSL certificates (important for secure API calls)
+
+# Observability
+sentry-sdk[fastapi]>=2.0.0    # error tracking + performance tracing (inert unless SENTRY_DSN is set)
