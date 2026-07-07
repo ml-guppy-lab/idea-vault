@@ -1,48 +1,82 @@
-# Idea Vault
+<div align="center">
 
-Never lose a thought again.
+# 🧠 Idea Vault
 
-Idea Vault is a full-stack, production-style idea management platform with secure auth, semantic retrieval, real-time AI chat, and a human-in-the-loop Agent mode that proposes changes before applying them.
+### *Never lose a thought again.*
 
-Live: [idea-vault-frontend.onrender.com](https://idea-vault-frontend.onrender.com)
+A full-stack, production-style **AI idea-management platform** — secure auth, semantic search,
+real-time AI chat, and a human-in-the-loop **AI Agent** that proposes changes before applying them.
+
+[![Live Demo](https://img.shields.io/badge/Live_Demo-idea--vault-2563eb?style=for-the-badge&logo=render&logoColor=white)](https://idea-vault-frontend.onrender.com)
+
+![Next.js](https://img.shields.io/badge/Next.js_16-000000?style=flat&logo=next.js&logoColor=white)
+![React](https://img.shields.io/badge/React_19-20232A?style=flat&logo=react&logoColor=61DAFB)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat&logo=fastapi&logoColor=white)
+![Python](https://img.shields.io/badge/Python_3.12-3776AB?style=flat&logo=python&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat&logo=postgresql&logoColor=white)
+![MongoDB](https://img.shields.io/badge/MongoDB_Atlas-47A248?style=flat&logo=mongodb&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-DC382D?style=flat&logo=redis&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)
+![Sentry](https://img.shields.io/badge/Sentry-362D59?style=flat&logo=sentry&logoColor=white)
+
+</div>
+
+![Idea Vault dashboard](images/dashboard_light_mode.png)
 
 ---
 
-## Why This Repo Stands Out
+## ✨ Why This Repo Stands Out
 
-This is not a CRUD demo with a chatbot bolted on. It demonstrates real engineering decisions across product, security, reliability, and AI systems.
+This is **not** a CRUD demo with a chatbot bolted on. It shows real engineering judgement across
+product, security, reliability, and AI systems — including trade-offs documented in postmortems.
 
-- Security-first auth architecture with BFF proxies and httpOnly cookies
-- PKCE for Google OAuth and one-time token exchange flow
-- Hybrid data architecture (PostgreSQL + MongoDB + Redis)
-- Semantic search pipeline with hosted embeddings and Atlas vector search
-- Real-time SSE chat with retries, fallback behavior, and status events
-- Agentic AI with proposal contracts and explicit human approval gates
-- Production hardening from real incident debugging and postmortems
+- 🔐 **Security-first auth** — BFF proxy pattern, httpOnly refresh cookies, Google OAuth with **PKCE**, one-time code exchange
+- 🧩 **Hybrid data architecture** — PostgreSQL (identity) + MongoDB Atlas (ideas + vector search) + Redis (sessions, rate limits)
+- 🔎 **Semantic search** — hosted embeddings + Atlas `$vectorSearch`, with **status-aware result ranking**
+- 💬 **One chat box, two brains** — a single endpoint auto-routes each message between the read (RAG) and write (Agent) pipelines
+- 🤖 **Human-in-the-loop Agent** — proposes changes as reviewable diffs; nothing is written without explicit approval
+- ♻️ **Rate-limit resilience** — automatic **multi-provider LLM failover** (Cerebras → Groq → OpenRouter) so free-tier limits never take the app down
+- 🛡️ **Layered topic guardrails** — keeps the assistant on-topic without brittle keyword blocklists
+- 🧠 **Conversation memory** — Redis sessions + sliding window + rolling summary for long chats
+- 📈 **Production observability** — full-stack **Sentry** error tracking (backend + frontend) + structured logging
+- 🚀 **Deployed & operated** — Docker Compose locally, Render in production, hardened from real incidents
 
 ---
 
-## Core Product Capabilities
+## 🧭 Core Product Capabilities
 
 ### Idea management
-- Create, edit, delete, and organize ideas
-- Status and priority tracking
-- Tagging and filtering
-- Secure image upload with Cloudinary
+- Create, edit, delete, and organize ideas with **status** (raw → exploring → validated → building → shipped / abandoned) and **priority**
+- **Collections** — group ideas into user-scoped collections; filter by collection or "uncategorised"
+- Tagging, search, and status filters
+- Secure image upload via Cloudinary
+- Polished **light & dark mode** throughout
 
-### AI chat modes
-- Vault AI mode: read-only RAG chat for querying your idea vault
-- AI Agent mode: proposal-based changes with Accept or Reject controls
+### AI chat — Vault AI & Agent
+- **Vault AI (RAG):** ask questions about your vault; answers stream in token-by-token
+- **AI Agent:** ask it to *change* things; it returns reviewable proposals with Accept / Reject
+- One chat box — the backend decides which mode each message needs
+
+<table>
+  <tr>
+    <td width="50%"><img src="images/ai_chatbot_normal_chat.png" alt="Vault AI RAG chat" /></td>
+    <td width="50%"><img src="images/ai_chatbot_agentic_ai_chat.png" alt="AI Agent proposal with Accept and Reject" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Vault AI — streaming answers grounded in your ideas</em></td>
+    <td align="center"><em>AI Agent — human-in-the-loop proposal with Accept / Reject</em></td>
+  </tr>
+</table>
 
 ### Task execution layer
 - Add, update, and remove tasks embedded under each idea
 - Task progress shown in detail and summary views
 
-### Account and identity
-- Email/password auth
-- Google OAuth with PKCE
-- Email verification and password reset
-- Linked auth identities (local plus Google on same account)
+### Account & identity
+- Email / password auth + **Google OAuth (PKCE)**
+- Password reset and email-verification flows (Resend transactional email)
+- Linked auth identities — local + Google on the same account
 
 ---
 
@@ -67,18 +101,23 @@ Why this matters:
 - Safe AI interaction model for mutable user data
 - Clear auditability of before/after changes
 
-### 3) Reliability under model/provider constraints
-- Rate-limit retries and fallback model behavior for LLM calls
-- Defensive parsing for mixed provider responses
-- Safe user-facing error responses with backend-side diagnostics
+### 3) Rate-limit resilience via multi-provider LLM failover
+- An ordered failover chain (**Cerebras → Groq → OpenRouter**), tried until one answers
+- Independent free-tier accounts = independent rate buckets, so free capacity **stacks**
+- Fails over on 429 / timeout / 5xx; streaming fails over at connect time
+- Provider-agnostic tool-call parsing so the Agent works across different models
 
 Why this matters:
-- Graceful degradation instead of brittle failures
+- Free-tier rate limits never take the app down — the exact failure that kills most portfolio demos
 
-### 4) Observability and debugging ergonomics
-- Explicit startup and service logging in critical flows
-- Contextual logs for model selection and fallback usage
-- Real-world error hardening reflected in implementation notes
+### 4) Production observability (Sentry, full-stack)
+- **Sentry** error tracking wired across FastAPI **and** Next.js, DSN-gated and PII-safe
+- Captures unhandled crashes, all 5xx, **and** otherwise-silent LLM/provider failures
+- Frontend → backend distributed traces; environment + release tagging
+- Structured logging for model selection, fallback usage, and critical flows
+
+Why this matters:
+- Turns a bare production "500" into a grouped, alertable issue with a full stack trace
 
 ---
 
@@ -93,10 +132,12 @@ flowchart TD
   C --> E[MongoDB Atlas]
   C --> F[Redis]
 
-  C --> G[OpenRouter or Ollama]
-  C --> H[Hugging Face Inference]
+  C --> G[LLM Failover:<br/>Cerebras → Groq → OpenRouter]
+  C --> H[Hugging Face Embeddings]
   C --> I[Cloudinary]
   C --> J[Resend]
+  C -.errors.-> K[Sentry]
+  B -.errors.-> K
 ```
 
 ### Data responsibilities
@@ -113,25 +154,37 @@ flowchart TD
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4 |
 | Backend | FastAPI, Pydantic v2, SQLAlchemy async |
 | Databases | PostgreSQL, MongoDB Atlas, Redis |
-| AI | OpenRouter or Ollama, Hugging Face embeddings |
+| AI | Cerebras · Groq · OpenRouter (failover) · Ollama (local), Hugging Face embeddings |
 | Auth | JWT access/refresh cookies, Google OAuth PKCE |
 | Infra | Docker Compose (local), Render (app), Atlas (MongoDB) |
+| Observability | Sentry (errors + tracing), structured logging |
 | Media/Email | Cloudinary, Resend |
 
 ---
 
-## AI and Agentic Capabilities
+## 🤖 AI & Agentic Capabilities
 
 ### Vault AI (RAG mode)
-- Intent-aware routing (conversational, listing, count, semantic search)
-- Model tiering by intent (fast vs standard)
-- SSE token streaming with frontend status indicators
+- **Unified endpoint** classifies each message and routes read vs write automatically
+- Intent-aware routing (conversational · listing · count · semantic search · out-of-scope)
+- **Model tiering** by intent (fast vs standard) to balance latency and cost
+- **Status-aware ranking** surfaces active ideas over shipped/abandoned ones
+- **Conversation memory** — Redis sessions, sliding window, and a rolling summary for long chats
+- **Query rewriting** turns elliptical follow-ups ("what about crocodiles?") into standalone searches
+- **Stop generation** — cancel mid-stream; the backend halts token generation to save quota
+- SSE token streaming with live status indicators
 
 ### AI Agent (proposal mode)
-- Tool-driven reasoning over user-scoped data
-- Structured proposal contracts for idea updates, idea creation, and task creation
-- Diff UI (before/after) and explicit Accept or Reject decisions
-- Backend-enforced user scope and write gating
+- Tool-driven reasoning over strictly user-scoped data
+- Structured proposal contracts: idea update, idea creation, task creation
+- Before/after **diff UI** with explicit Accept / Reject
+- Backend-enforced user scoping and write gating — the AI can *suggest*, never *auto-write*
+- Auto re-embeds edited ideas so semantic search stays accurate
+
+### Safety & guardrails
+- **Layered topic guardrails** (regex fast-path → LLM judgment → system-prompt rules) keep it on-topic without false positives
+- Refuses code-generation and general-knowledge requests with fixed, friendly messages
+- Prompt-injection mitigation via input length caps and defense-in-depth
 
 ---
 
@@ -142,23 +195,21 @@ flowchart TD
 - PKCE for OAuth code exchange
 - User isolation enforced at query layer and write layer
 - Validation via typed schemas at API boundaries
+- Per-user rate limiting on AI endpoints (Redis)
+- Error tracking without PII (Sentry, `send_default_pii=False`)
 - Defensive client and server error handling
 
 ---
 
-## Screenshots
+## 📸 Screenshots
 
-| Login | Dashboard |
+| Dashboard — Light | Dashboard — Dark |
 |---|---|
-| ![Login page](screenshots/login.png) | ![Dashboard](screenshots/dashboard.png) |
+| ![Dashboard light mode](images/dashboard_light_mode.png) | ![Dashboard dark mode](images/dashboard_dark_mode.png) |
 
-| Create Idea | Idea Detail |
+| Login | Profile |
 |---|---|
-| ![Create idea](screenshots/create-idea.png) | ![Idea detail](screenshots/idea-detail.png) |
-
-| Profile | Settings |
-|---|---|
-| ![Profile](screenshots/profile.png) | ![Settings](screenshots/settings.png) |
+| ![Login page](images/login_page.png) | ![Profile page](images/profile_page.png) |
 
 ---
 
@@ -188,7 +239,8 @@ docker compose up --build
 idea-vault-code/
 ├── backend/                    # FastAPI services, auth, AI, agent, data access
 ├── frontend/                   # Next.js app, BFF routes, UI components
-├── Readme/                     # Versioned implementation notes (v2, v3, v4)
+├── images/                     # UI screenshots used in this README
+├── Readme/                     # Versioned implementation notes (v2–v5)
 └── docker-compose.yml
 ```
 
@@ -200,8 +252,9 @@ Detailed build logs and architecture evolution are documented in:
 - Readme/steps_v2.md
 - Readme/steps_v3.md
 - Readme/steps_v4.md
+- Readme/steps_v5.md — collections, the unified AI endpoint, topic guardrails, conversation memory, multi-provider LLM failover, and Sentry observability
 
-These files include design rationale, debugging lessons, and production hardening decisions.
+Each file is written to be read start-to-finish, with design rationale, rejected alternatives, debugging lessons, and production-hardening decisions.
 
 ---
 

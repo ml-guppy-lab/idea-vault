@@ -1257,3 +1257,108 @@ markup from the visible reply so nothing leaks even in edge cases.
    markup.
 3. A plain question ("what are my ideas?") still returns normal text with no proposals.
 
+---
+
+## Production Error Tracking with Sentry (backend + frontend)
+
+### The problem
+In production the app failed with a bare **500** in the browser console — no traceback, no context,
+no way to tell *what* broke. The server logs on the host are live-tail only: you have to catch the
+error as it happens, there's no history, no grouping, and no alerts. Worse, several failures are
+**silent** — the read pipeline catches an LLM/provider error and returns a graceful message, so the
+user sees "something went wrong" while nothing anywhere records *why*. Without visibility, debugging
+production is guesswork.
+
+### Why we even need this
+- **You can't fix what you can't see.** A stack trace + the failing request turns "unknown error" into
+  a one-line diagnosis.
+- **Silent degradations stay silent.** Graceful fallbacks are good UX but hide the underlying failure;
+  something must still record it.
+- **Operability is part of the job.** The engineering charter calls for observable failures and enough
+  context to debug incidents quickly — error tracking is how that's met.
+
+### The fix
+**Sentry**, wired across **both** the FastAPI backend and the Next.js frontend, capturing unhandled
+exceptions with full stack traces, the failing request's context, release/environment tags, grouping,
+and email alerts. Everything is **gated behind a DSN env var**, so with no DSN set it is a complete
+no-op — local dev and tests are unaffected.
+
+Two backend enhancements make coverage complete:
+1. **All 5xx are captured** — the SDK's default `failed_request_status_codes` is the full 500–599 range,
+   so both unhandled crashes *and* deliberate `HTTPException(500)` are reported (verified in SDK source;
+   no extra config needed).
+2. **Silent failures are surfaced** — `sentry_sdk.capture_exception()` was added to the read pipeline's
+   graceful `except Exception` blocks (classifier, route classifier, query rewriter, summariser, RAG
+   stream creation, decompose/route), so a provider/LLM failure is reported **even though the user still
+   gets a friendly fallback**.
+
+On the frontend, `@sentry/nextjs` captures browser crashes, failed BFF route handlers, and uncaught
+React render errors (via a `global-error` boundary), and — with tracing on — links a browser action to
+the backend request it triggered into one **frontend → backend** timeline.
+
+### Why Sentry over the alternatives
+- **Purpose-built for "why did this 500?"** — stack trace + request context + grouping + alerts, which
+  is exactly the pain here. Log-aggregation tools (Better Stack, Axiom, Grafana Loki) are great for
+  *searching* logs but don't group/alert on exceptions out of the box.
+- **First-class SDKs for our exact stack** — official FastAPI and Next.js integrations, ~a handful of
+  lines each; auto-instruments requests.
+- **Generous free tier** — enough for a solo portfolio project (no cost, matching the zero-spend goal).
+- **Recruiter-recognised** — it's the industry-standard error tracker; wiring it full-stack signals
+  production maturity most portfolio projects lack.
+- **Not chosen: raw log tailing** (no history/alerts), **self-hosted stacks** (too much ops for a solo
+  project), **log-only SaaS** (searches lines but won't turn a crash into a grouped, alertable issue).
+  A log-aggregation tool can be added *later* via a Render Log Stream to complement Sentry.
+
+### Decisions
+- **DSN-gated, inert by default.** No DSN → `capture_exception()` is a verified no-op and `Sentry.init`
+  disables the SDK. Local dev, CI, and the smoke tests behave exactly as before.
+- **`send_default_pii=False` everywhere.** No cookies, request bodies, or user identifiers are shipped —
+  matches the charter's "no secret/PII leakage".
+- **Capture 5xx and silent failures; deliberately skip 429/4xx.** Rate limiting and 404/403 are normal
+  control flow; reporting them would turn Sentry into noise. Real degradations (unexpected exceptions)
+  are what get captured.
+- **One public DSN drives client + server on the frontend.** A Sentry DSN can only submit events (not
+  read), so `NEXT_PUBLIC_SENTRY_DSN` is safe to expose and keeps configuration to a single variable.
+- **Skipped Session Replay and `tunnelRoute`.** Replay adds bundle weight for little diagnostic gain
+  here; `tunnelRoute` would route events through a Next path the auth **middleware** could block. Both
+  omitted to stay simple and avoid a subtle breakage — easy to add later.
+- **Build stays green without a Sentry account.** `withSentryConfig` just skips source-map upload when
+  `SENTRY_ORG/PROJECT/AUTH_TOKEN` are absent, so nothing breaks before the DSN exists.
+
+### Files changed
+Backend:
+- `backend/app/core/config.py` — added `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_TRACES_SAMPLE_RATE`,
+  `SENTRY_RELEASE` (all default empty/dev → inert).
+- `backend/app/main.py` — initialises Sentry before the app is created (only if `SENTRY_DSN` is set);
+  added a DEBUG-only `/api/debug/sentry-test` route to confirm wiring.
+- `backend/requirements.txt` — added `sentry-sdk[fastapi]`.
+- `backend/app/ai/chat_pipeline.py`, `backend/app/services/rag_service.py`,
+  `backend/app/services/intent_classifier.py`, `backend/app/ai/query_rewriter.py`,
+  `backend/app/ai/history_summarizer.py` — `sentry_sdk.capture_exception()` added to the graceful
+  `except Exception` blocks so silent LLM/provider failures are still reported.
+
+Frontend:
+- `frontend/instrumentation-client.ts` — browser init + client navigation tracing.
+- `frontend/sentry.server.config.ts`, `frontend/sentry.edge.config.ts` — Node/Edge runtime init.
+- `frontend/instrumentation.ts` — `register()` + `onRequestError` (server component / route-handler errors).
+- `frontend/app/global-error.tsx` — captures uncaught React render errors with a recovery UI.
+- `frontend/next.config.ts` — wrapped with `withSentryConfig`.
+
+### Configuration
+- **Backend (Render):** `SENTRY_DSN=<FastAPI project DSN>`, `SENTRY_ENVIRONMENT=production`
+  (optional: `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_RELEASE=<git sha>`).
+- **Frontend host:** `NEXT_PUBLIC_SENTRY_DSN=<Next.js project DSN>`, `NEXT_PUBLIC_SENTRY_ENVIRONMENT=production`
+  (optional for readable stack traces: `SENTRY_ORG`, `SENTRY_PROJECT`, `SENTRY_AUTH_TOKEN` so source maps upload at build).
+
+### How to verify it works
+1. Set the DSN(s) and redeploy → reproduce the production 500. It appears in Sentry's **Issues** tab
+   within seconds with the full traceback, route, and environment.
+2. Backend wiring check: with `DEBUG=True`, hit `/api/debug/sentry-test` → the intentional error shows
+   up in Sentry. Remove/ignore afterwards.
+3. Silent-failure check: force an LLM failure (e.g. bad model name) → the user gets the graceful
+   fallback **and** a captured exception appears in Sentry.
+4. Frontend check: trigger a client error → it appears with browser/session context; with tracing on,
+   the browser event links to the backend request in one trace.
+5. No-DSN check: locally (no DSN) everything runs unchanged and the classifier smoke test still passes —
+   confirming the integration is fully inert until configured.
+
