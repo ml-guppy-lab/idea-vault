@@ -91,6 +91,19 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
 
+    # Cross-provider LLM failover (all free tiers, all OpenAI-compatible).
+    # When LLM_PROVIDER=openrouter, generation/classifier calls try
+    # Cerebras → Groq → OpenRouter in order, spilling over on rate-limit/5xx.
+    # Each provider is a separate account = a separate rate-limit bucket, so
+    # capacity stacks. Only providers whose API key is set are included, so this
+    # is safe to enable incrementally (set one key, or all three).
+    GROQ_API_KEY: str = ""
+    CEREBRAS_API_KEY: str = ""
+    LLM_GROQ_MODEL_STANDARD: str = "llama-3.3-70b-versatile"
+    LLM_GROQ_MODEL_FAST: str = "llama-3.1-8b-instant"
+    LLM_CEREBRAS_MODEL_STANDARD: str = "llama-3.3-70b"
+    LLM_CEREBRAS_MODEL_FAST: str = "llama3.1-8b"
+
     # Cloudinary — image storage
     CLOUDINARY_CLOUD_NAME: str = ""
     CLOUDINARY_API_KEY: str = ""

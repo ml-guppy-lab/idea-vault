@@ -17,9 +17,10 @@ import logging
 import re
 from enum import Enum
 
-from openai import AsyncOpenAI, RateLimitError
+from openai import RateLimitError
 
-from app.core.llm_config import LLMProvider, llm_config
+from app.core.llm_client import create_chat_completion
+from app.core.llm_config import LLMProvider, ModelTier, llm_config
 
 logger = logging.getLogger(__name__)
 
@@ -153,38 +154,33 @@ async def classify_intent(query: str) -> QueryIntent:
     """
     safe_query = query.strip()[:_MAX_QUERY_CHARS]
 
-    client = AsyncOpenAI(
-        base_url=llm_config.base_url,
-        api_key=llm_config.api_key,
-        default_headers=llm_config.extra_headers,
-    )
-
     # Disable thinking for Ollama qwen3 models — without this, the model runs a
     # full chain-of-thought before outputting a single label word, adding 30-120s
-    # of latency to every request. think=False makes classification near-instant.
-    # max_tokens=None for Ollama: safety net in case think=False is not honoured
-    # by the OpenAI-compat layer — lets the model finish thinking then output label.
-    # max_tokens=10 for OpenRouter/others: no thinking mode, label fits in 10 tokens.
-    kwargs: dict = {
-        "model": llm_config.classifier_model,
-        "messages": [
-            {"role": "system", "content": _INTENT_SYSTEM_PROMPT},
-            {"role": "user", "content": safe_query},
-        ],
-        "max_tokens": None if llm_config.provider == LLMProvider.ollama else 10,
-        "temperature": 0,  # deterministic — classification is not creative
-        "stream": False,
-    }
-    if llm_config.provider == LLMProvider.ollama:
-        kwargs["extra_body"] = {"think": False}
-
+    # of latency. think=False (applied per Ollama endpoint by the executor) makes
+    # classification near-instant.
+    # max_tokens=None for Ollama: safety net if think=False is not honoured by the
+    # OpenAI-compat layer — lets the model finish thinking then output the label.
+    # max_tokens=10 for cloud providers: no thinking mode, the label fits in 10 tokens.
+    # The FAST-tier chain (Cerebras → Groq → OpenRouter) provides cross-provider
+    # failover so a rate-limited classifier still returns a real label.
     try:
-        response = await client.chat.completions.create(**kwargs)
+        response = await create_chat_completion(
+            [
+                {"role": "system", "content": _INTENT_SYSTEM_PROMPT},
+                {"role": "user", "content": safe_query},
+            ],
+            tier=ModelTier.FAST,
+            max_tokens=None if llm_config.provider == LLMProvider.ollama else 10,
+            temperature=0,  # deterministic — classification is not creative
+        )
     except RateLimitError:
-        # Classifier model is rate-limited at the provider level.
-        # Default to SEMANTIC_SEARCH — safest fallback because it triggers
-        # retrieval so the user still gets a relevant answer.
+        # Every provider is rate-limited. Default to SEMANTIC_SEARCH — the safest
+        # fallback because it triggers retrieval so the user still gets an answer.
         logger.warning("classifier rate-limited; defaulting to SEMANTIC_SEARCH")
+        return QueryIntent.SEMANTIC_SEARCH
+    except Exception:
+        # Any other exhaustion/transport error — degrade gracefully, never 500.
+        logger.exception("classifier failed; defaulting to SEMANTIC_SEARCH")
         return QueryIntent.SEMANTIC_SEARCH
 
     raw = (response.choices[0].message.content or "")
@@ -289,30 +285,24 @@ async def classify_chat_route(query: str) -> ChatRoute:
     if _WRITE_FASTPATH.search(safe_query):
         return ChatRoute.AGENT_WRITE
 
-    client = AsyncOpenAI(
-        base_url=llm_config.base_url,
-        api_key=llm_config.api_key,
-        default_headers=llm_config.extra_headers,
-    )
-
-    kwargs: dict = {
-        "model": llm_config.classifier_model,
-        "messages": [
-            {"role": "system", "content": _ROUTE_SYSTEM_PROMPT},
-            {"role": "user", "content": safe_query},
-        ],
-        "max_tokens": None if llm_config.provider == LLMProvider.ollama else 10,
-        "temperature": 0,
-        "stream": False,
-    }
-    if llm_config.provider == LLMProvider.ollama:
-        kwargs["extra_body"] = {"think": False}
-
+    # FAST-tier chain (Cerebras → Groq → OpenRouter) with cross-provider failover.
     try:
-        response = await client.chat.completions.create(**kwargs)
+        response = await create_chat_completion(
+            [
+                {"role": "system", "content": _ROUTE_SYSTEM_PROMPT},
+                {"role": "user", "content": safe_query},
+            ],
+            tier=ModelTier.FAST,
+            max_tokens=None if llm_config.provider == LLMProvider.ollama else 10,
+            temperature=0,
+        )
     except RateLimitError:
         # Classifier rate-limited → default to the safe, non-destructive path.
         logger.warning("route classifier rate-limited; defaulting to AGENT_READ")
+        return ChatRoute.AGENT_READ
+    except Exception:
+        # Any other exhaustion/transport error → safe, non-destructive default.
+        logger.exception("route classifier failed; defaulting to AGENT_READ")
         return ChatRoute.AGENT_READ
 
     # Defensive: some providers can return an empty choices list on transient
