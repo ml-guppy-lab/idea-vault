@@ -119,6 +119,17 @@ Why this matters:
 Why this matters:
 - Turns a bare production "500" into a grouped, alertable issue with a full stack trace
 
+**Observability in action** — real backend issues captured in production. This is monitoring
+*working*: each entry is a real, actionable signal rather than a silent failure.
+
+<p align="center"><em>Issues feed — errors grouped by type, failing endpoint, and event count</em></p>
+
+![Sentry issues feed](images/sentry_backend.png)
+
+<p align="center"><em>Issue detail — full stack trace, request URL, trace ID, and environment tag</em></p>
+
+![Sentry issue detail with stack trace](images/sentry_backend_log1.png)
+
 ---
 
 ## System Architecture
