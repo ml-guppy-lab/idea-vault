@@ -26,6 +26,7 @@ always better than a broken request.
 import logging
 import re
 
+import sentry_sdk
 from openai import RateLimitError
 
 from app.core.llm_client import create_chat_completion
@@ -103,6 +104,7 @@ async def rewrite_query(history: list[dict], message: str) -> str:
         return message
     except Exception:
         logger.exception("[rewrite] failed; using original message")
+        sentry_sdk.capture_exception()
         return message
 
     choices = getattr(response, "choices", None)
