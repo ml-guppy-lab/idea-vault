@@ -17,6 +17,7 @@ import logging
 import re
 from enum import Enum
 
+import sentry_sdk
 from openai import RateLimitError
 
 from app.core.llm_client import create_chat_completion
@@ -180,7 +181,9 @@ async def classify_intent(query: str) -> QueryIntent:
         return QueryIntent.SEMANTIC_SEARCH
     except Exception:
         # Any other exhaustion/transport error — degrade gracefully, never 500.
+        # Report to Sentry so this silent degradation is still visible.
         logger.exception("classifier failed; defaulting to SEMANTIC_SEARCH")
+        sentry_sdk.capture_exception()
         return QueryIntent.SEMANTIC_SEARCH
 
     raw = (response.choices[0].message.content or "")
@@ -302,7 +305,9 @@ async def classify_chat_route(query: str) -> ChatRoute:
         return ChatRoute.AGENT_READ
     except Exception:
         # Any other exhaustion/transport error → safe, non-destructive default.
+        # Report to Sentry so this silent degradation is still visible.
         logger.exception("route classifier failed; defaulting to AGENT_READ")
+        sentry_sdk.capture_exception()
         return ChatRoute.AGENT_READ
 
     # Defensive: some providers can return an empty choices list on transient

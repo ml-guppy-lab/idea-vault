@@ -17,6 +17,7 @@ import logging
 import re
 from typing import Optional
 
+import sentry_sdk
 from openai import RateLimitError
 
 from app.core.llm_client import create_chat_completion
@@ -73,6 +74,7 @@ async def summarize_history(
         return None
     except Exception:
         logger.exception("[summary] failed; keeping messages unsummarised")
+        sentry_sdk.capture_exception()
         return None
 
     choices = getattr(response, "choices", None)

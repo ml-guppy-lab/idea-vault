@@ -25,6 +25,7 @@ Usage:
 from typing import AsyncGenerator
 import logging
 
+import sentry_sdk
 from openai import RateLimitError
 
 from app.core.llm_client import create_chat_stream
@@ -225,6 +226,7 @@ async def stream_rag_response(
         return
     except Exception:
         logger.exception("[rag] unexpected error creating LLM stream")
+        sentry_sdk.capture_exception()
         yield {"type": "error", "content": "Something went wrong. Please try again."}
         return
 

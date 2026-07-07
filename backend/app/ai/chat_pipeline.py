@@ -16,6 +16,7 @@ import json
 import logging
 from typing import AsyncGenerator, Awaitable, Callable, Optional
 
+import sentry_sdk
 from motor.motor_asyncio import AsyncIOMotorDatabase
 import redis.asyncio as aioredis
 
@@ -108,6 +109,7 @@ async def stream_rag_sse(
         context = await decompose_and_route(query=search_query, user_id=user_id, db=db)
     except Exception:
         logger.exception("[chat] decompose_and_route failed for user=%s", user_id)
+        sentry_sdk.capture_exception()
         yield format_sse({"type": "error", "content": "Something went wrong. Please try again."})
         return
 
