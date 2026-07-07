@@ -136,4 +136,7 @@ async def decompose_and_route(query: str, user_id: str, db) -> dict:
         "raw_query":   query,                # always the original full query
         "count":       count,
         "is_compound": True,
+        # True if ANY sub-query explicitly targeted completed/shipped/past ideas
+        # (set by handle_semantic_search). Drives status-aware prompt guidance.
+        "include_completed": any(r.get("include_completed") for r in results),
     }

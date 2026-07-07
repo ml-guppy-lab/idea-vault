@@ -11,10 +11,74 @@ Embeddings are generated using HuggingFace's sentence-transformers model
 """
 
 import asyncio
+import re
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.services.embedding_service import generate_query_embedding
+
+
+# ── Status-aware result ranking (metadata-aware, NOT cross-encoder reranking) ──
+#
+# A rule-based post-processing step that nudges completed work (shipped /
+# abandoned) below active ideas using a field we already store — `status` — so
+# a default query like "do I have any fitness ideas?" surfaces ideas the user
+# can still act on instead of burying them under finished ones. This adds ZERO
+# extra model calls; it is deliberately NOT the cross-encoder reranking
+# (Cohere / BGE) discussed elsewhere. Refer to it as "metadata-aware result
+# ranking" in docs to stay accurate.
+_STATUS_MULTIPLIER: dict[str, float] = {
+    "raw": 1.0,
+    "exploring": 1.0,
+    "validated": 1.0,
+    "building": 1.0,
+    "shipped": 0.6,
+    "abandoned": 0.5,
+}
+
+# Signals that the user is EXPLICITLY asking about completed / shipped / past
+# ideas. When any of these match, the status penalty is skipped so queries like
+# "what fitness ideas did I ship?" or "have I ever had a fitness idea?" return
+# completed ideas prominently instead of demoting them. High-precision by
+# design — it must not fire on ordinary active-idea queries.
+_COMPLETED_QUERY_PATTERN = re.compile(
+    r"\b("
+    r"ship(?:ped|ping)?|launch(?:ed|ing)?|complet(?:e|ed|ing)|finish(?:ed|ing)?|"
+    r"abandon(?:ed|ing)?|dropped|killed|"
+    r"already\s+(?:built|made|done|shipped|launched)|"
+    r"have\s+i\s+ever|ever\s+(?:had|made|created|built|thought)|"
+    r"in\s+the\s+past|previously|past\s+ideas?|"
+    r"did\s+i\s+(?:ship|build|make|launch|complete|finish)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def query_targets_completed(query: str) -> bool:
+    """
+    True if the query is explicitly about completed / shipped / past ideas.
+
+    Used to decide whether to apply the status penalty. Pure regex — no LLM
+    call — matching the project's layered fast-path guard pattern.
+    """
+    return bool(_COMPLETED_QUERY_PATTERN.search(query or ""))
+
+
+def rerank_by_status(ideas: list[dict]) -> list[dict]:
+    """
+    Demote completed ideas (shipped / abandoned) below active ones by scaling
+    each idea's similarity `score` with a per-status multiplier, then sort by
+    the adjusted score (descending).
+
+    Pure and side-effect-light: writes an `adjusted_score` field on each dict
+    for observability but does not touch the original `score`. Ideas missing a
+    `status` or `score` fall back to neutral (multiplier 1.0, score 1.0).
+    """
+    for idea in ideas:
+        original_score = idea.get("score", 1.0)
+        multiplier = _STATUS_MULTIPLIER.get(idea.get("status", "raw"), 1.0)
+        idea["adjusted_score"] = original_score * multiplier
+    return sorted(ideas, key=lambda x: x["adjusted_score"], reverse=True)
 
 
 async def search_similar_ideas(

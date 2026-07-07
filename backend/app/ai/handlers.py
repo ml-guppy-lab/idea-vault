@@ -23,7 +23,11 @@ Return shape (all handlers):
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.services.vector_search import search_similar_ideas
+from app.services.vector_search import (
+    query_targets_completed,
+    rerank_by_status,
+    search_similar_ideas,
+)
 
 # Fields projected for listing/fallback queries.
 # Explicit inclusion keeps the payload small and predictable.
@@ -46,6 +50,10 @@ _IDEA_PROJECTION = {
 
 _LISTING_LIMIT = 10
 _SEARCH_LIMIT = 5
+# Retrieve a wider candidate pool than we finally serve so status-aware
+# ranking has room to demote completed ideas without dropping genuinely
+# relevant active ones out of the top results.
+_RERANK_CANDIDATE_LIMIT = 15
 
 
 # ── Handler: CONVERSATIONAL ────────────────────────────────────────────────────
@@ -112,16 +120,26 @@ async def handle_semantic_search(
     """
     Run vector similarity search against this user's idea embeddings.
 
+    Retrieves a wider candidate pool then applies status-aware ranking so
+    active ideas (raw/exploring/validated/building) surface above completed
+    ones (shipped/abandoned) for ordinary queries. When the user explicitly
+    asks about completed/shipped/past ideas, the penalty is skipped and results
+    stay in pure similarity order so those ideas are not deprioritised.
+
     Falls back to the N most recent ideas if the vector index returns nothing
     (e.g. new user with few ideas, or query too generic to score above threshold).
     This mirrors the fallback logic already present in rag_service — kept here
     so the router is self-contained and rag_service can be simplified later.
     """
+    # Explicit "what did I ship / abandon / ever have" queries must NOT penalise
+    # completed ideas — detect that intent up front with a cheap regex guard.
+    include_completed = query_targets_completed(query)
+
     ideas = await search_similar_ideas(
         query=query,
         user_id=user_id,   # ← user isolation enforced inside search_similar_ideas
         db=db,
-        limit=_SEARCH_LIMIT,
+        limit=_RERANK_CANDIDATE_LIMIT,
     )
 
     # Fallback: generic queries (e.g. "what are my ideas?") score low against
@@ -132,12 +150,22 @@ async def handle_semantic_search(
             _IDEA_PROJECTION,
         ).sort("createdAt", -1).limit(_SEARCH_LIMIT)
         ideas = [_serialise(doc) async for doc in cursor]
+    elif include_completed:
+        # Explicit completed-idea query — keep the vector similarity order and
+        # just trim to the final result count. No status penalty.
+        ideas = ideas[:_SEARCH_LIMIT]
+    else:
+        # Default query — demote shipped/abandoned, then take the top results.
+        ideas = rerank_by_status(ideas)[:_SEARCH_LIMIT]
 
     return {
         "ideas": ideas,
         "intent": "SEMANTIC_SEARCH",
         "raw_query": query,
         "count": None,
+        # Tells the prompt builder whether to separate out completed ideas
+        # (default) or present them prominently (explicit completed query).
+        "include_completed": include_completed,
     }
 
 

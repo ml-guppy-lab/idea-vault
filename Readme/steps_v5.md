@@ -968,3 +968,71 @@ A **Stop button** that solves both halves of the problem:
 4. On Render, watch token usage: stopping a long generation should stop new tokens being billed
    (confirms `is_disconnected()` is breaking the backend loop).
 
+---
+
+## Status-Aware Result Ranking (active ideas first)
+
+### The problem
+Semantic search ranked ideas by similarity **score alone**, with no awareness of their `status`.
+For a user with many ideas — some **shipped**, some **abandoned** — a query like *"do I have any
+fitness ideas?"* could return mostly completed ones, burying the active ideas they actually want to
+act on. But simply **hard-filtering** completed ideas out is also wrong: it breaks legitimate queries
+like *"what fitness ideas have I shipped?"*.
+
+### The fix
+A lightweight, **metadata-aware ranking** step that runs after retrieval:
+1. **Retrieve a wider candidate pool** — the semantic handler now fetches **15** candidates instead of
+   5, leaving room to demote completed ideas without dropping genuinely relevant active ones.
+2. **Adjust scores by status** — each candidate's similarity score is multiplied by a per-status
+   weight (active statuses `raw/exploring/validated/building` = `1.0`; `shipped` = `0.6`;
+   `abandoned` = `0.5`), then the list is re-sorted and trimmed to the top 5.
+3. **Detect explicit "completed" queries** — a cheap, high-precision regex (`query_targets_completed`)
+   recognises when the user is *asking about* shipped/abandoned/past ideas (*"did I ship…"*,
+   *"have I ever…"*, *"abandoned ideas"*). In that case the penalty is **skipped** and results stay in
+   pure similarity order so those ideas surface prominently.
+4. **Prompt guidance** — for default queries the system prompt tells the model to prioritise active
+   ideas and mention any completed ones separately under a *"Previously completed ideas"* note; for
+   explicit completed queries it is told to present them prominently and not deprioritise them.
+
+> **Naming note (interview-accurate):** this is **not** cross-encoder *reranking* (Cohere / BGE-Reranker)
+> — there is no extra model call. It is a rule-based post-processing step over a field we already store.
+> Call it **"metadata-aware result ranking"**, not "reranking", to stay accurate.
+
+### Decisions
+- **Adjust scores, don't hard-filter.** Demoting (not deleting) completed ideas keeps default queries
+  clean *and* keeps explicit "what did I ship?" queries working — hard-filtering would break the latter.
+- **Regex to detect intent, not another LLM call.** The completed-query detector mirrors the project's
+  existing layered fast-path guards (zero cost, deterministic) and is deliberately **high-precision**:
+  it must never fire on ordinary active-idea queries.
+- **Retrieve 15, serve 5.** A wider pool is what makes ranking meaningful; without it, demoting a
+  completed idea would just promote whatever the 6th result happened to be. The final result count is
+  unchanged.
+- **Multipliers, not a fixed penalty.** Scaling preserves *relative* similarity within a status band —
+  a strongly-matching shipped idea still beats a weakly-matching one — while cleanly separating the bands.
+- **Fallback path untouched.** When vector search returns nothing (generic query / sparse vault) we
+  still serve recent ideas in recency order — no ranking applied, matching prior behaviour.
+- **Flag flows through compound queries.** `include_completed` is propagated through the decomposer's
+  merge (`any(...)` across sub-queries) so a multi-part message still drives the right prompt guidance.
+- **Prompt guidance scoped to `SEMANTIC_SEARCH`.** Listing ("show my ideas") is left alone — the
+  status separation only applies where relevance ranking actually happens.
+
+### Files changed
+- `backend/app/services/vector_search.py` — added `rerank_by_status()` (status-weighted re-sort,
+  writes `adjusted_score`, leaves `score` intact) and `query_targets_completed()` (regex intent guard).
+- `backend/app/ai/handlers.py` — `handle_semantic_search` retrieves 15 candidates, applies the status
+  penalty for default queries (or keeps similarity order for explicit completed queries), and returns
+  the new `include_completed` flag.
+- `backend/app/ai/query_decomposer.py` — propagates `include_completed` through the compound-query merge.
+- `backend/app/services/rag_service.py` — injects status-aware guidance into the `SEMANTIC_SEARCH`
+  system prompt, driven by `include_completed`.
+
+### How to verify it works
+1. *"Do I have any fitness ideas?"* → active fitness ideas surface first; any completed ones are
+   mentioned separately at the end.
+2. *"Have I ever had any fitness ideas?"* → **all** fitness ideas returned, including completed.
+3. *"What fitness ideas did I ship?"* → shipped ideas returned **prominently**, not penalised.
+4. *"Fitness ideas I can work on"* → active ideas lead; completed ones are pushed down.
+5. Unit check (no DB needed): an active idea at score `0.80` and a raw idea at `0.72` outrank a shipped
+   idea at `0.95` (→`0.57`) and an abandoned one at `0.90` (→`0.45`); the completed-query detector scores
+   the four phrasings above as `False / True / True / False` respectively.
+
