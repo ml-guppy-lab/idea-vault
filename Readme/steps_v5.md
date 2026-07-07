@@ -968,3 +968,161 @@ A **Stop button** that solves both halves of the problem:
 4. On Render, watch token usage: stopping a long generation should stop new tokens being billed
    (confirms `is_disconnected()` is breaking the backend loop).
 
+---
+
+## Status-Aware Result Ranking (active ideas first)
+
+### The problem
+Semantic search ranked ideas by similarity **score alone**, with no awareness of their `status`.
+For a user with many ideas — some **shipped**, some **abandoned** — a query like *"do I have any
+fitness ideas?"* could return mostly completed ones, burying the active ideas they actually want to
+act on. But simply **hard-filtering** completed ideas out is also wrong: it breaks legitimate queries
+like *"what fitness ideas have I shipped?"*.
+
+### The fix
+A lightweight, **metadata-aware ranking** step that runs after retrieval:
+1. **Retrieve a wider candidate pool** — the semantic handler now fetches **15** candidates instead of
+   5, leaving room to demote completed ideas without dropping genuinely relevant active ones.
+2. **Adjust scores by status** — each candidate's similarity score is multiplied by a per-status
+   weight (active statuses `raw/exploring/validated/building` = `1.0`; `shipped` = `0.6`;
+   `abandoned` = `0.5`), then the list is re-sorted and trimmed to the top 5.
+3. **Detect explicit "completed" queries** — a cheap, high-precision regex (`query_targets_completed`)
+   recognises when the user is *asking about* shipped/abandoned/past ideas (*"did I ship…"*,
+   *"have I ever…"*, *"abandoned ideas"*). In that case the penalty is **skipped** and results stay in
+   pure similarity order so those ideas surface prominently.
+4. **Prompt guidance** — for default queries the system prompt tells the model to prioritise active
+   ideas and mention any completed ones separately under a *"Previously completed ideas"* note; for
+   explicit completed queries it is told to present them prominently and not deprioritise them.
+
+> **Naming note (interview-accurate):** this is **not** cross-encoder *reranking* (Cohere / BGE-Reranker)
+> — there is no extra model call. It is a rule-based post-processing step over a field we already store.
+> Call it **"metadata-aware result ranking"**, not "reranking", to stay accurate.
+
+### Decisions
+- **Adjust scores, don't hard-filter.** Demoting (not deleting) completed ideas keeps default queries
+  clean *and* keeps explicit "what did I ship?" queries working — hard-filtering would break the latter.
+- **Regex to detect intent, not another LLM call.** The completed-query detector mirrors the project's
+  existing layered fast-path guards (zero cost, deterministic) and is deliberately **high-precision**:
+  it must never fire on ordinary active-idea queries.
+- **Retrieve 15, serve 5.** A wider pool is what makes ranking meaningful; without it, demoting a
+  completed idea would just promote whatever the 6th result happened to be. The final result count is
+  unchanged.
+- **Multipliers, not a fixed penalty.** Scaling preserves *relative* similarity within a status band —
+  a strongly-matching shipped idea still beats a weakly-matching one — while cleanly separating the bands.
+- **Fallback path untouched.** When vector search returns nothing (generic query / sparse vault) we
+  still serve recent ideas in recency order — no ranking applied, matching prior behaviour.
+- **Flag flows through compound queries.** `include_completed` is propagated through the decomposer's
+  merge (`any(...)` across sub-queries) so a multi-part message still drives the right prompt guidance.
+- **Prompt guidance scoped to `SEMANTIC_SEARCH`.** Listing ("show my ideas") is left alone — the
+  status separation only applies where relevance ranking actually happens.
+
+### Files changed
+- `backend/app/services/vector_search.py` — added `rerank_by_status()` (status-weighted re-sort,
+  writes `adjusted_score`, leaves `score` intact) and `query_targets_completed()` (regex intent guard).
+- `backend/app/ai/handlers.py` — `handle_semantic_search` retrieves 15 candidates, applies the status
+  penalty for default queries (or keeps similarity order for explicit completed queries), and returns
+  the new `include_completed` flag.
+- `backend/app/ai/query_decomposer.py` — propagates `include_completed` through the compound-query merge.
+- `backend/app/services/rag_service.py` — injects status-aware guidance into the `SEMANTIC_SEARCH`
+  system prompt, driven by `include_completed`.
+
+### How to verify it works
+1. *"Do I have any fitness ideas?"* → active fitness ideas surface first; any completed ones are
+   mentioned separately at the end.
+2. *"Have I ever had any fitness ideas?"* → **all** fitness ideas returned, including completed.
+3. *"What fitness ideas did I ship?"* → shipped ideas returned **prominently**, not penalised.
+4. *"Fitness ideas I can work on"* → active ideas lead; completed ones are pushed down.
+5. Unit check (no DB needed): an active idea at score `0.80` and a raw idea at `0.72` outrank a shipped
+   idea at `0.95` (→`0.57`) and an abandoned one at `0.90` (→`0.45`); the completed-query detector scores
+   the four phrasings above as `False / True / True / False` respectively.
+
+---
+
+## Email Verification: Temporarily Disabled (and Why Resend, not SMTP)
+
+### The problem
+Two things collided:
+1. **No paid domain yet.** Transactional email providers only deliver to arbitrary inboxes once you
+   verify a real sending **domain**. Without one, every verification link was being routed to a personal
+   inbox (via the dev override) instead of the actual user — not something acceptable in production.
+2. **A hard login gate.** New local accounts were created `email_verified=False` and the login route
+   blocked them until they clicked a link that, in this pre-domain state, they'd never usefully receive.
+   The result: a user could sign up but never get in.
+
+This is a resume/portfolio project, so the pragmatic call was to **defer** email verification (buy a
+domain later) rather than let a half-wired email flow block the core signup experience today.
+
+### The fix
+Email verification is switched **off** end-to-end, but every piece is preserved so it can be switched
+back on in minutes once a domain exists:
+- **Signup creates pre-verified accounts.** `register()` now sets `email_verified=True`, generates no
+  token, and sends no email — so registration simply creates a usable account.
+- **Login gate lifted.** The "please verify your email" 403 check in `login()` is commented out so any
+  account (including any legacy unverified rows) can sign in.
+- **Frontend skips the "check your email" screen.** A single flag `EMAIL_VERIFICATION_ENABLED = false`
+  in `SignupForm.tsx` redirects a successful signup straight to `/login`; the entire check-email/resend
+  UI is left intact behind the flag.
+
+### Why comment the code out instead of deleting it
+- **This is a "not yet", not a "never".** The email flow is correct and fully built — it's blocked only
+  by an external dependency (a domain). Deleting working code you intend to restore just means rewriting
+  and re-testing it later.
+- **Reversibility is a one-liner.** Re-enabling is: flip `EMAIL_VERIFICATION_ENABLED` to `true`, and
+  uncomment the token/email lines + login gate (each marked with an `EMAIL VERIFICATION TEMPORARILY
+  DISABLED` banner). No logic has to be reconstructed from memory.
+- **The commented lines are living documentation.** They show the *exact* wiring that must come back,
+  so future-me (or a reviewer) sees precisely what "on" looks like.
+- **Endpoints stay put.** `/auth/verify-email` and `/auth/resend-verification` are untouched — harmless
+  while unused, and part of what re-activates. Google OAuth is unaffected (its users are pre-verified).
+
+### Why Resend (HTTPS API) instead of raw SMTP
+The email layer uses **Resend's async API** (`send_async`, backed by httpx), not hand-rolled SMTP. For a
+transactional web app deployed to a managed host, that's the stronger choice:
+- **Deliverability.** Sending SMTP from an unknown server IP lands in spam or is dropped. Resend sends
+  from warmed, reputation-managed IPs and handles **SPF/DKIM/DMARC** for you — mail actually reaches the
+  inbox once the domain is verified.
+- **It's one HTTPS `POST`, not a stateful protocol.** SMTP is a chatty, multi-round-trip conversation
+  (HELO → MAIL FROM → RCPT TO → DATA) with connection pooling, TLS and timeouts to manage. Resend is a
+  single async call that drops cleanly into the existing `BackgroundTasks` pattern.
+- **Ports.** Managed hosts (Render included) **block outbound port 25** and throttle 587/465 to curb
+  spam. Resend rides **443 (HTTPS)**, which is never blocked — so it works in production without begging
+  support to open ports.
+- **Observability & retries.** SMTP gives a cryptic status and no history. Resend provides a dashboard +
+  webhooks (delivered / bounced / complained) and automatic retries — the "observable failures" the
+  engineering charter asks for.
+- **Secrets.** SMTP needs long-lived user/password credentials in the app; Resend uses a **scoped,
+  rotatable API key** (send-only), shrinking the blast radius if leaked.
+
+### Decisions
+- **Defer, don't half-ship.** A verification flow that can't deliver is worse than no gate at all — it
+  locks real users out. Disabling it cleanly beats leaving a broken gate in the login path.
+- **Provider behind a thin wrapper.** All sending lives in `email_service.py` (`send_verification_email`
+  / `send_password_reset_email`), so swapping Resend for SES/Postmark later — or re-enabling — is a
+  single-file change; the auth routes never touch the provider directly.
+- **Dev override is intentional.** `EMAIL_OVERRIDE_TO` routes all mail to the Resend account owner in
+  development (the only address deliverable without a verified domain); it's empty in production. This is
+  exactly the constraint that motivated deferring verification.
+- **Accept the trade-off.** Resend adds a vendor dependency and a free-tier cap, mitigated by the wrapper
+  boundary above — a fair price for inbox deliverability you can actually prove.
+
+### Files changed
+- `backend/app/api/auth.py` — `register()` creates pre-verified accounts (token/email lines commented);
+  the `login()` email-verification 403 gate commented out; each block flagged for easy restoration.
+- `frontend/components/auth/SignupForm.tsx` — added `EMAIL_VERIFICATION_ENABLED` flag; successful signup
+  redirects to `/login` while off. The check-email/resend UI is preserved intact.
+- *(unchanged, kept for later)* `backend/app/services/email_service.py` (Resend async wrapper),
+  `/auth/verify-email`, `/auth/resend-verification`.
+
+### How to verify it works
+1. Sign up with a new email → you are taken straight to `/login`, no "check your email" screen, and **no
+   email is sent** to any inbox.
+2. Log in with those credentials immediately → success (the verification gate no longer blocks you).
+3. Google OAuth sign-in still works and is pre-verified as before.
+
+### How to re-enable (once a domain is owned)
+1. Verify the sending domain at `https://resend.com/domains` and set `EMAIL_FROM` to the verified address;
+   clear `EMAIL_OVERRIDE_TO`.
+2. `backend/app/api/auth.py` — uncomment the token/email lines in `register()`, set `email_verified` back
+   to `False`, and uncomment the login gate.
+3. `frontend/components/auth/SignupForm.tsx` — set `EMAIL_VERIFICATION_ENABLED = true`.
+

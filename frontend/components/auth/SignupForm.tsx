@@ -21,6 +21,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Loader2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import api from "@/lib/api";
 import GoogleButton from "./GoogleButton";
 
@@ -101,7 +102,12 @@ function AuthInput({
     </div>
   );
 }
-
+// Email verification is temporarily disabled until a real sending domain is
+// configured (verification links currently resolve to a personal inbox). While
+// off, signup creates a pre-verified account and redirects straight to login.
+// Flip this to true — and restore the commented backend blocks in auth.py — to
+// bring back the full "check your email" verification flow.
+const EMAIL_VERIFICATION_ENABLED: boolean = false;
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function SignupForm() {
@@ -110,6 +116,7 @@ export default function SignupForm() {
   const [apiError, setApiError] = useState<string | null>(null);
   // State for the "resend" button on the check-email screen.
   const [resendStatus, setResendStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const router = useRouter();
 
   const {
     register,
@@ -128,8 +135,14 @@ export default function SignupForm() {
         email: values.email,
         password: values.password,
       });
-      // Show the "check your email" screen instead of redirecting to login.
-      setRegisteredEmail(values.email);
+      if (EMAIL_VERIFICATION_ENABLED) {
+        // Show the "check your email" screen instead of redirecting to login.
+        setRegisteredEmail(values.email);
+      } else {
+        // Verification disabled — the account is created pre-verified, so skip
+        // the check-email screen and send the user straight to login.
+        router.push("/login");
+      }
     } catch (err: unknown) {
       // Extract the FastAPI detail message, fall back to a generic string
       const detail =
