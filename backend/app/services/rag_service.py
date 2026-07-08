@@ -148,6 +148,22 @@ def _build_system_prompt(context: dict) -> str:
             f" Use this number if they asked how many ideas they have.\n"
         )
 
+    # When retrieval found nothing, the model must NOT mistake an empty result
+    # for an out-of-scope request. "Do I have any butterfly ideas?" is perfectly
+    # in scope — the honest answer is simply "no, not yet". Without this clause
+    # the model sees the empty context sitting next to STRICT_GUARDRAILS (which
+    # contains the exact scope-refusal wording) and wrongly emits that refusal.
+    # This makes the in-scope "no matches" path explicit and overrides it.
+    no_results_note = ""
+    if not context.get("ideas"):
+        no_results_note = (
+            "\nIMPORTANT — NO MATCHES FOUND: This is a valid, in-scope question about the "
+            "user's OWN ideas; they simply have none saved that match this topic yet. This is "
+            f'NOT an out-of-scope request. Do NOT refuse and do NOT output "{SCOPE_REFUSAL}". '
+            "Instead, tell the user warmly and directly that they don't have any saved ideas "
+            "about this topic yet, then briefly offer to help them capture one if they'd like.\n"
+        )
+
     return f"""{compound_prefix}You are a personal idea assistant for Idea Vault.
 Your job is to help the user explore, understand, and act on their saved ideas.
 {count_fact}
@@ -159,7 +175,7 @@ RULES:
 - Be encouraging and constructive
 {status_note}
 {STRICT_GUARDRAILS}
-
+{no_results_note}
 USER'S RELEVANT IDEAS:
 {ideas_text}
 

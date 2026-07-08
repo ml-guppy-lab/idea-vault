@@ -30,6 +30,18 @@ logger = logging.getLogger(__name__)
 # This also limits the blast radius of any prompt-injection attempt.
 _MAX_QUERY_CHARS = 200
 
+# Output token budget for cloud classifier calls.
+#
+# The FAST tier now runs reasoning models (gpt-oss on Cerebras/OpenRouter), which
+# spend tokens on internal reasoning BEFORE emitting the final answer. A tight cap
+# (the old value was 10) let the reasoning consume the whole budget, so `content`
+# came back EMPTY and the classifier silently fell back to its default label.
+# This budget gives the reasoning model room to finish and emit the label in
+# `content`; non-reasoning models (e.g. Groq llama-3.1-8b-instant) ignore the
+# headroom and still stop right after the short label, so it costs them nothing.
+# Ollama uses max_tokens=None instead (local reasoning is unbounded but free).
+_CLOUD_CLASSIFIER_MAX_TOKENS = 512
+
 
 # ───────────────────────────────────────────────────────────────────────────────
 # Topic guardrails
@@ -161,7 +173,8 @@ async def classify_intent(query: str) -> QueryIntent:
     # classification near-instant.
     # max_tokens=None for Ollama: safety net if think=False is not honoured by the
     # OpenAI-compat layer — lets the model finish thinking then output the label.
-    # max_tokens=10 for cloud providers: no thinking mode, the label fits in 10 tokens.
+    # _CLOUD_CLASSIFIER_MAX_TOKENS for cloud providers: enough headroom for a
+    # reasoning model (gpt-oss) to finish reasoning and still emit the label.
     # The FAST-tier chain (Cerebras → Groq → OpenRouter) provides cross-provider
     # failover so a rate-limited classifier still returns a real label.
     try:
@@ -171,8 +184,12 @@ async def classify_intent(query: str) -> QueryIntent:
                 {"role": "user", "content": safe_query},
             ],
             tier=ModelTier.FAST,
-            max_tokens=None if llm_config.provider == LLMProvider.ollama else 10,
+            max_tokens=None if llm_config.provider == LLMProvider.ollama else _CLOUD_CLASSIFIER_MAX_TOKENS,
             temperature=0,  # deterministic — classification is not creative
+            # gpt-oss is a reasoning model; "low" keeps it from over-thinking a
+            # one-word label. Stripped automatically for the non-reasoning llama
+            # primary, so it only ever applies to a gpt-oss backup endpoint.
+            reasoning_effort="low",
         )
     except RateLimitError:
         # Every provider is rate-limited. Default to SEMANTIC_SEARCH — the safest
@@ -296,8 +313,12 @@ async def classify_chat_route(query: str) -> ChatRoute:
                 {"role": "user", "content": safe_query},
             ],
             tier=ModelTier.FAST,
-            max_tokens=None if llm_config.provider == LLMProvider.ollama else 10,
+            max_tokens=None if llm_config.provider == LLMProvider.ollama else _CLOUD_CLASSIFIER_MAX_TOKENS,
             temperature=0,
+            # gpt-oss reasoning models: "low" avoids wasting the token budget on
+            # chain-of-thought for a one-word route. Auto-stripped for the
+            # non-reasoning llama primary (see _filter_unsupported_params).
+            reasoning_effort="low",
         )
     except RateLimitError:
         # Classifier rate-limited → default to the safe, non-destructive path.

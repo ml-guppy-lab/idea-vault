@@ -91,47 +91,65 @@ def _cloud_chain(tier: ModelTier) -> list[LLMEndpoint]:
 
     Only providers whose API key is configured are included, so the chain
     degrades gracefully (set one key or all three).
+
+    Ordering is tier-aware:
+      - STANDARD (generation + agent): Cerebras → Groq → OpenRouter. Cerebras'
+        gpt-oss-120b leads for its low-latency, tool-capable inference.
+      - FAST (classify / rewrite / summarise): Groq → Cerebras → OpenRouter.
+        Groq's llama-3.1-8b-instant is a small NON-reasoning model, so it emits
+        its one-word answer instantly. The gpt-oss models are reasoning models
+        that "think" before answering, so on this hot path they sit behind it as
+        backups (and get reasoning_effort=low from the classifier when reached).
     """
     standard = tier is ModelTier.STANDARD
-    endpoints: list[LLMEndpoint] = []
 
-    if settings.CEREBRAS_API_KEY:
-        endpoints.append(
-            LLMEndpoint(
-                provider="cerebras",
-                base_url="https://api.cerebras.ai/v1",
-                api_key=settings.CEREBRAS_API_KEY,
-                model=(
-                    settings.LLM_CEREBRAS_MODEL_STANDARD
-                    if standard
-                    else settings.LLM_CEREBRAS_MODEL_FAST
-                ),
-            )
+    cerebras = (
+        LLMEndpoint(
+            provider="cerebras",
+            base_url="https://api.cerebras.ai/v1",
+            api_key=settings.CEREBRAS_API_KEY,
+            model=(
+                settings.LLM_CEREBRAS_MODEL_STANDARD
+                if standard
+                else settings.LLM_CEREBRAS_MODEL_FAST
+            ),
         )
-    if settings.GROQ_API_KEY:
-        endpoints.append(
-            LLMEndpoint(
-                provider="groq",
-                base_url="https://api.groq.com/openai/v1",
-                api_key=settings.GROQ_API_KEY,
-                model=(
-                    settings.LLM_GROQ_MODEL_STANDARD
-                    if standard
-                    else settings.LLM_GROQ_MODEL_FAST
-                ),
-            )
+        if settings.CEREBRAS_API_KEY
+        else None
+    )
+    groq = (
+        LLMEndpoint(
+            provider="groq",
+            base_url="https://api.groq.com/openai/v1",
+            api_key=settings.GROQ_API_KEY,
+            model=(
+                settings.LLM_GROQ_MODEL_STANDARD
+                if standard
+                else settings.LLM_GROQ_MODEL_FAST
+            ),
         )
-    if settings.OPENROUTER_API_KEY:
-        endpoints.append(
-            LLMEndpoint(
-                provider="openrouter",
-                base_url="https://openrouter.ai/api/v1",
-                api_key=settings.OPENROUTER_API_KEY,
-                model=llm_config.model_for_tier(tier),  # existing OpenRouter tier map
-                extra_headers=_openrouter_headers(),
-            )
+        if settings.GROQ_API_KEY
+        else None
+    )
+    openrouter = (
+        LLMEndpoint(
+            provider="openrouter",
+            base_url="https://openrouter.ai/api/v1",
+            api_key=settings.OPENROUTER_API_KEY,
+            model=llm_config.model_for_tier(tier),  # existing OpenRouter tier map
+            extra_headers=_openrouter_headers(),
         )
-    return endpoints
+        if settings.OPENROUTER_API_KEY
+        else None
+    )
+
+    # FAST prefers Groq's non-reasoning llama first; STANDARD keeps Cerebras first.
+    ordered = (
+        [cerebras, groq, openrouter]
+        if standard
+        else [groq, cerebras, openrouter]
+    )
+    return [ep for ep in ordered if ep is not None]
 
 
 def _configured_endpoint(tier: ModelTier) -> LLMEndpoint:
@@ -185,6 +203,22 @@ def _merge_extra_body(kwargs: dict[str, Any], endpoint: LLMEndpoint) -> dict[str
     body.update(endpoint.extra_body)
     merged["extra_body"] = body
     return merged
+
+
+def _filter_unsupported_params(kwargs: dict[str, Any], endpoint: LLMEndpoint) -> dict[str, Any]:
+    """Drop call params the target model would reject.
+
+    ``reasoning_effort`` is only meaningful for gpt-oss reasoning models. A
+    non-reasoning model such as Groq's llama-3.1-8b-instant would 400 on the
+    unknown param, so it is stripped for any endpoint whose model isn't gpt-oss.
+    This lets the classifier pass ``reasoning_effort="low"`` unconditionally: it
+    applies to gpt-oss backups and is silently removed for the llama primary.
+    """
+    if "reasoning_effort" in kwargs and "gpt-oss" not in endpoint.model.lower():
+        filtered = dict(kwargs)
+        filtered.pop("reasoning_effort", None)
+        return filtered
+    return kwargs
 
 
 def _langfuse_kwargs(
@@ -248,6 +282,7 @@ async def create_chat_completion(
     for endpoint in chain:
         client = _client_for(endpoint)
         call_kwargs = dict(_merge_extra_body(kwargs, endpoint))
+        call_kwargs = _filter_unsupported_params(call_kwargs, endpoint)
         call_kwargs.update(
             _langfuse_kwargs(
                 endpoint,
@@ -312,6 +347,7 @@ async def create_chat_stream(
     for endpoint in chain:
         client = _client_for(endpoint)
         call_kwargs = dict(_merge_extra_body(kwargs, endpoint))
+        call_kwargs = _filter_unsupported_params(call_kwargs, endpoint)
         call_kwargs.update(
             _langfuse_kwargs(
                 endpoint,

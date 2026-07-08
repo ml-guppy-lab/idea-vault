@@ -1681,3 +1681,57 @@ OpenRouter's STANDARD model lives in the code (`_MODEL_TIER_MAP`), not env, so t
 redeploy. The graceful agent path (Issue 4), Sentry OpenAI-integration disable (Issue 5), and Postgres
 pre-ping (Issue 6) are all code changes and take effect on deploy.
 
+---
+
+## Empty Search Wrongly Refused as "Out of Scope" (guardrail false positive)
+
+### The problem
+Asking *"do I have any dog ideas?"* worked — the assistant found and returned the matching idea. But
+asking *"do I have any butterfly ideas?"* when no such idea existed replied with the off-topic refusal:
+*"I can only help you with your saved ideas and tasks in Idea Vault."* That is wrong — the question is
+perfectly in scope; the honest answer is simply "no, not yet." The only difference between the two
+queries was whether retrieval found anything.
+
+### Root cause
+This was **not** a classifier bug — both queries route correctly to `SEMANTIC_SEARCH`. It surfaced at the
+**generation** step. When retrieval returns zero ideas, the context block becomes *"The user has no
+relevant ideas saved yet."* That empty context sits directly next to `STRICT_GUARDRAILS` in the system
+prompt — and those guardrails contain the *exact* scope-refusal sentence plus the rule "you ONLY discuss
+saved ideas; refuse if out of scope." The model reads an empty result as *out of scope* and copies the
+refusal string verbatim. Because the trigger is an anchor **in the prompt** (not a model quirk), it
+reproduced on both Llama and gpt-oss — which is why the issue predated the model swap.
+
+### The fix
+When retrieval returns **zero ideas** for a `LISTING`/`SEMANTIC_SEARCH` query, inject a short
+"NO MATCHES FOUND" clause into the system prompt, placed **immediately after** `STRICT_GUARDRAILS` so it
+wins on recency. It states explicitly that this is a valid, in-scope question, that the user simply has
+nothing saved on the topic yet, that the model must **not** refuse or emit the scope-refusal string, and
+that it should instead say so warmly and offer to help capture the idea. When ideas *are* found the clause
+is absent and behaviour is unchanged.
+
+### Decisions
+- **Fix the false positive, don't weaken the guardrail.** The scope refusal is still exactly right for
+  genuine off-topic questions (capital of France, "write me code"), which the classifier's `OUT_OF_SCOPE`
+  short-circuit refuses *before* generation ever runs. Only the empty-result case needed disambiguating.
+- **Override by recency, not by deletion.** Rather than stripping the refusal wording from the guardrails
+  (which would regress real off-topic handling), the no-match clause is appended after them so the model
+  sees the correct instruction last — the strongest, least invasive nudge.
+- **Scope the clause to empty retrieval only.** It is emitted solely when `context["ideas"]` is empty for
+  a listing/search intent, so populated answers, counts, and conversational turns are untouched.
+- **Turn a dead end into a next step.** Instead of a flat "no," the assistant offers to help capture the
+  idea — the empty result becomes a prompt to grow the vault, which is on-brand for the product.
+
+### Files changed
+- `backend/app/services/rag_service.py` — `_build_system_prompt` now builds a `no_results_note` when the
+  retrieved `ideas` list is empty and injects it after `STRICT_GUARDRAILS` in the LISTING/SEMANTIC_SEARCH
+  prompt.
+
+### How to verify it works
+1. Ask about a topic you have **no** idea for ("do I have any butterfly ideas?") → the assistant says you
+   don't have one yet and offers to help add it — no scope refusal.
+2. Ask about a topic you **do** have → the matching idea is returned as before (no behaviour change).
+3. Ask a genuinely off-topic question ("what's the capital of France?") → still refused via the classifier's
+   `OUT_OF_SCOPE` short-circuit, before generation.
+4. Prompt check: `_build_system_prompt({"intent": "SEMANTIC_SEARCH", "ideas": []})` contains
+   `NO MATCHES FOUND`; the same call with a non-empty `ideas` list does not.
+
