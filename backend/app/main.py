@@ -77,6 +77,12 @@ async def lifespan(app: FastAPI):
     _app_log.info("Resend API key set: %s", bool(settings.RESEND_API_KEY))
 
     yield
+    # Flush any buffered Langfuse events so nothing is lost on shutdown.
+    from app.core.langfuse_client import get_langfuse  # noqa: PLC0415
+
+    _lf = get_langfuse()
+    if _lf is not None:
+        _lf.flush()
     await close_redis_connection()
     await close_mongo_connection()
 

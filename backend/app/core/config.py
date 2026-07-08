@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     SENTRY_TRACES_SAMPLE_RATE: float = 0.1
     SENTRY_RELEASE: str = ""
 
+    # Langfuse — LLM observability (traces + user feedback). Inert unless BOTH
+    # keys are set. Both live server-side; nothing Langfuse-related is exposed to
+    # the browser (feedback scores are written from the backend).
+    LANGFUSE_PUBLIC_KEY: str = ""
+    LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_HOST: str = "https://cloud.langfuse.com"
+
     # Database (PostgreSQL)
     DATABASE_URL: str = "postgresql+asyncpg://idea_user:idea_pass@localhost:5432/idea_vault_auth"
 

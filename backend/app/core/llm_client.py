@@ -37,12 +37,21 @@ from openai import (
     APIConnectionError,
     APIStatusError,
     APITimeoutError,
-    AsyncOpenAI,
     RateLimitError,
 )
+from openai import AsyncOpenAI as _OpenAIAsyncClient
 
 from app.core.config import settings
+from app.core.langfuse_client import LANGFUSE_ENABLED
 from app.core.llm_config import LLMProvider, ModelTier, llm_config
+
+# When Langfuse is enabled, every LLM call is traced automatically by swapping in
+# Langfuse's OpenAI drop-in (identical constructor + API to the stock client).
+# When disabled, the stock client is used and nothing is sent.
+if LANGFUSE_ENABLED:
+    from langfuse.openai import AsyncOpenAI as _AsyncClient  # traced drop-in
+else:
+    _AsyncClient = _OpenAIAsyncClient
 
 logger = logging.getLogger(__name__)
 
@@ -159,8 +168,8 @@ def _resolve_chain(tier: ModelTier) -> list[LLMEndpoint]:
     return [_configured_endpoint(tier)]
 
 
-def _client_for(endpoint: LLMEndpoint) -> AsyncOpenAI:
-    return AsyncOpenAI(
+def _client_for(endpoint: LLMEndpoint) -> Any:
+    return _AsyncClient(
         base_url=endpoint.base_url,
         api_key=endpoint.api_key,
         default_headers=endpoint.extra_headers or None,
@@ -178,25 +187,77 @@ def _merge_extra_body(kwargs: dict[str, Any], endpoint: LLMEndpoint) -> dict[str
     return merged
 
 
+def _langfuse_kwargs(
+    endpoint: LLMEndpoint,
+    tier: ModelTier,
+    *,
+    trace_id: str | None,
+    session_id: str | None,
+    user_id: str | None,
+    generation_name: str | None,
+) -> dict[str, Any]:
+    """Extra kwargs the Langfuse drop-in strips before calling the provider.
+
+    Added ONLY when Langfuse is enabled, so the stock client never receives them.
+    We pass ONLY keys the drop-in recognises (``name``, ``metadata``, ``trace_id``)
+    — session_id/user_id ride inside ``metadata`` because passing them as top-level
+    kwargs would leak to the provider API and 400 the request.
+    """
+    if not LANGFUSE_ENABLED:
+        return {}
+    metadata: dict[str, Any] = {
+        "provider": endpoint.provider,
+        "tier": tier.value,
+        "model": endpoint.model,
+    }
+    if session_id:
+        metadata["session_id"] = session_id
+    if user_id:
+        metadata["user_id"] = user_id
+    kw: dict[str, Any] = {
+        "name": generation_name or f"llm-{tier.value}",
+        "metadata": metadata,
+    }
+    if trace_id:
+        kw["trace_id"] = trace_id
+    return kw
+
+
 async def create_chat_completion(
     messages: list[dict[str, Any]],
     *,
     tier: ModelTier,
+    trace_id: str | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
+    generation_name: str | None = None,
     **kwargs: Any,
 ) -> Any:
     """Non-streaming completion with cross-provider failover.
 
     Walks the tier chain; on a failover error or an empty ``choices`` payload,
     advances to the next provider. Extra kwargs (``tools``, ``tool_choice``,
-    ``max_tokens``, ``temperature``, …) are forwarded unchanged. Raises the last
-    error only when every endpoint is exhausted.
+    ``max_tokens``, ``temperature``, …) are forwarded unchanged. The optional
+    ``trace_id``/``session_id``/``user_id``/``generation_name`` are used only for
+    Langfuse tracing and never reach the provider. Raises the last error only
+    when every endpoint is exhausted.
     """
     chain = _resolve_chain(tier)
     last_exc: Exception | None = None
 
     for endpoint in chain:
         client = _client_for(endpoint)
-        call_kwargs = _merge_extra_body(kwargs, endpoint)
+        call_kwargs = dict(_merge_extra_body(kwargs, endpoint))
+        call_kwargs.update(
+            _langfuse_kwargs(
+                endpoint,
+                tier,
+                trace_id=trace_id,
+                session_id=session_id,
+                user_id=user_id,
+                generation_name=generation_name,
+            )
+        )
         try:
             response = await client.chat.completions.create(
                 model=endpoint.model,
@@ -231,21 +292,36 @@ async def create_chat_stream(
     messages: list[dict[str, Any]],
     *,
     tier: ModelTier,
+    trace_id: str | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
+    generation_name: str | None = None,
     **kwargs: Any,
 ) -> Any:
     """Streaming completion with connect-time cross-provider failover.
 
     Returns an OpenAI streaming iterator from the first endpoint that accepts
     the request. Failover happens only at stream-creation time (where 429s
-    occur); a mid-stream drop is not retried. Raises the last error when every
-    endpoint is exhausted.
+    occur); a mid-stream drop is not retried. The optional Langfuse fields are
+    used only for tracing and never reach the provider. Raises the last error
+    when every endpoint is exhausted.
     """
     chain = _resolve_chain(tier)
     last_exc: Exception | None = None
 
     for endpoint in chain:
         client = _client_for(endpoint)
-        call_kwargs = _merge_extra_body(kwargs, endpoint)
+        call_kwargs = dict(_merge_extra_body(kwargs, endpoint))
+        call_kwargs.update(
+            _langfuse_kwargs(
+                endpoint,
+                tier,
+                trace_id=trace_id,
+                session_id=session_id,
+                user_id=user_id,
+                generation_name=generation_name,
+            )
+        )
         try:
             stream = await client.chat.completions.create(
                 model=endpoint.model,

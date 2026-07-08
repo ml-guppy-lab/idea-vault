@@ -31,12 +31,13 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 import redis.asyncio as aioredis
 
 from app.ai.chat_pipeline import format_sse, refusal_stream, stream_rag_sse
+from app.core.langfuse_client import new_trace_id, record_feedback
 from app.core.rate_limit import check_message_rate_limit
 from app.core.security import get_current_user
 from app.db.mongodb import get_mongo_db
 from app.db.redis import get_redis
 from app.models.user import User
-from app.schemas.chat import ChatRequest
+from app.schemas.chat import ChatRequest, FeedbackRequest
 from app.services.agentic_ai.agent_service import run_agent
 from app.services.intent_classifier import (
     CODE_REFUSAL,
@@ -116,8 +117,15 @@ async def unified_chat(
     if route == ChatRoute.AGENT_WRITE:
         # The agent only PROPOSES here — no database write occurs. Approval
         # happens later via POST /api/agent/decide.
+        # One Langfuse trace per turn (None when tracing is off), returned to the
+        # client so a thumbs-up/down can be scored against it.
+        trace_id = new_trace_id()
         result = await run_agent(
-            user_message=request.message, user_id=user_id, history=window
+            user_message=request.message,
+            user_id=user_id,
+            history=window,
+            trace_id=trace_id,
+            session_id=session_id,
         )
         await save_exchange(redis, user_id, session_id, request.message, result.message)
         return JSONResponse(
@@ -127,6 +135,7 @@ async def unified_chat(
                 # mode="json" converts enums (status/priority) to JSON-safe values.
                 "proposals": [p.model_dump(mode="json") for p in result.proposals],
                 "session_id": session_id,
+                "trace_id": trace_id,
             }
         )
 
@@ -158,3 +167,23 @@ async def unified_chat(
             "Connection": "keep-alive",
         },
     )
+
+
+@router.post(
+    "/feedback",
+    summary="Record thumbs-up/down feedback on a generated AI reply",
+)
+async def submit_feedback(
+    payload: FeedbackRequest,
+    current_user: User = Depends(get_current_user),  # auth gate
+) -> dict:
+    """Attach a user-feedback score to the Langfuse trace of a generated reply.
+
+    Best-effort and non-blocking: when Langfuse is disabled or the write fails,
+    this simply returns ``{"recorded": false}``. Auth is required so anonymous
+    clients can't spam scores; the trace_id is opaque and carries no user data.
+    """
+    recorded = record_feedback(
+        payload.trace_id, 1 if payload.value else 0, payload.comment
+    )
+    return {"recorded": recorded}

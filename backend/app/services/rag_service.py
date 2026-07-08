@@ -172,6 +172,10 @@ async def stream_rag_response(
     user_message: str,
     context: dict,
     history: list[dict] | None = None,
+    *,
+    trace_id: str | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
     LLM streaming layer — receives pre-fetched context from QueryRouter.
@@ -220,6 +224,10 @@ async def stream_rag_response(
             tier=tier,
             max_tokens=2000,  # enough headroom for the reply
             temperature=0.7,  # 0=deterministic, 1=creative; 0.7 balances both
+            trace_id=trace_id,
+            session_id=session_id,
+            user_id=user_id,
+            generation_name="rag-answer",
         )
     except RateLimitError:
         yield {"type": "error", "content": "LLM is temporarily unavailable. Please try again in a moment."}

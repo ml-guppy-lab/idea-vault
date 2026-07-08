@@ -22,6 +22,7 @@ import redis.asyncio as aioredis
 
 from app.ai.query_decomposer import decompose_and_route
 from app.ai.query_rewriter import rewrite_query
+from app.core.langfuse_client import new_trace_id
 from app.services.intent_classifier import SCOPE_REFUSAL, QueryIntent
 from app.services.rag_service import stream_rag_response
 from app.services.session_service import save_exchange
@@ -93,6 +94,12 @@ async def stream_rag_sse(
     """
     history = history or []
 
+    # One Langfuse trace per chat turn (no-op id when tracing is disabled). We
+    # surface it to the client so a thumbs-up/down can be scored against it.
+    trace_id = new_trace_id()
+    if trace_id:
+        yield format_sse({"type": "trace", "content": trace_id})
+
     # ── Step 0: Query rewriting for retrieval (only with prior context) ───────
     # A follow-up like "which of these relate to weight loss?" embeds to noise on
     # its own. With history we rewrite it into a standalone query used ONLY for
@@ -132,7 +139,8 @@ async def stream_rag_sse(
     saw_error = False
     interrupted = False
     async for event in stream_rag_response(
-        user_message=message, context=context, history=history
+        user_message=message, context=context, history=history,
+        trace_id=trace_id, session_id=session_id, user_id=user_id,
     ):
         if event.get("type") == "text":
             assistant_parts.append(event.get("content", ""))
