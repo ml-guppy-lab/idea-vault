@@ -113,10 +113,20 @@ class Settings(BaseSettings):
     # is safe to enable incrementally (set one key, or all three).
     GROQ_API_KEY: str = ""
     CEREBRAS_API_KEY: str = ""
-    LLM_GROQ_MODEL_STANDARD: str = "llama-3.3-70b-versatile"
+    # Groq's llama-3.3-70b-versatile intermittently returns HTTP 400
+    # `tool_use_failed` on the agent — its tool-call output fails Groq's strict
+    # server-side validator. gpt-oss-120b is a Groq production model that's
+    # tool-reliable, so the (tool-using) STANDARD tier uses it; the FAST tier
+    # does no tool calling, so it keeps the small, quick llama-3.1-8b-instant.
+    LLM_GROQ_MODEL_STANDARD: str = "openai/gpt-oss-120b"
     LLM_GROQ_MODEL_FAST: str = "llama-3.1-8b-instant"
-    LLM_CEREBRAS_MODEL_STANDARD: str = "llama-3.3-70b"
-    LLM_CEREBRAS_MODEL_FAST: str = "llama3.1-8b"
+    # Cerebras retired the Llama models from its free/shared endpoint (they moved
+    # to paid Dedicated Endpoints), which is why the old IDs returned 404. The
+    # current production model on the public endpoint is gpt-oss-120b — fast and
+    # tool-capable — so it serves both tiers. (Preview models like gemma-4-31b
+    # exist too but "may be discontinued on short notice", so we avoid them.)
+    LLM_CEREBRAS_MODEL_STANDARD: str = "gpt-oss-120b"
+    LLM_CEREBRAS_MODEL_FAST: str = "gpt-oss-120b"
 
     # Cloudinary — image storage
     CLOUDINARY_CLOUD_NAME: str = ""

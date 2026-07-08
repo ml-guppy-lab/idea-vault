@@ -7,6 +7,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Any
 
+import sentry_sdk
 from bson import ObjectId
 from fastapi import BackgroundTasks
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -199,15 +200,30 @@ async def run_agent(
 	# Max 3 turns: tool discovery -> tool results -> final explanation.
 	for _ in range(3):
 		# 1) Ask model what to do (plain answer vs. tool calls).
-		response = await _create_completion_with_fallback(
-			messages=messages,
-			tools=AGENT_TOOLS,
-			tool_choice="auto",
-			max_tokens=1200,
-			trace_id=trace_id,
-			session_id=session_id,
-			user_id=user_id,
-		)
+		try:
+			response = await _create_completion_with_fallback(
+				messages=messages,
+				tools=AGENT_TOOLS,
+				tool_choice="auto",
+				max_tokens=1200,
+				trace_id=trace_id,
+				session_id=session_id,
+				user_id=user_id,
+			)
+		except Exception:
+			# Every provider failed (rate limits / model access / tool errors).
+			# Degrade to a friendly message instead of a user-facing 500; Sentry
+			# still records it once so the outage stays visible.
+			logger.exception(
+				"Agent completion failed across all providers (user_id=%s)", user_id
+			)
+			sentry_sdk.capture_exception()
+			final_message = (
+				"I'm having trouble reaching the AI service right now. "
+				"Please try again in a moment."
+			)
+			break
+
 		choices = getattr(response, "choices", None)
 		if not choices:
 			logger.error(
@@ -315,28 +331,36 @@ async def run_agent(
 				)
 			else:
 				# Structured path — ask the model for a concise user-facing summary.
-				summary = await _create_completion_with_fallback(
-					messages=messages
-					+ [
-						{
-							"role": "user",
-							"content": "Briefly summarise what changes you are proposing and why. Keep it concise.",
-						}
-					],
-					max_tokens=220,
-					trace_id=trace_id,
-					session_id=session_id,
-					user_id=user_id,
-				)
-				summary_choices = getattr(summary, "choices", None)
-				if summary_choices:
-					final_message = summary_choices[0].message.content or ""
-				else:
-					logger.warning(
-						"Agent summary completion returned no choices (user_id=%s).",
-						user_id,
+				try:
+					summary = await _create_completion_with_fallback(
+						messages=messages
+						+ [
+							{
+								"role": "user",
+								"content": "Briefly summarise what changes you are proposing and why. Keep it concise.",
+							}
+						],
+						max_tokens=220,
+						trace_id=trace_id,
+						session_id=session_id,
+						user_id=user_id,
 					)
-					final_message = "I reviewed your request and prepared suggestions."
+					summary_choices = getattr(summary, "choices", None)
+					if summary_choices:
+						final_message = summary_choices[0].message.content or ""
+					else:
+						logger.warning(
+							"Agent summary completion returned no choices (user_id=%s).",
+							user_id,
+						)
+						final_message = "I reviewed your request and prepared suggestions."
+				except Exception:
+					# The proposals are already built; a failed summary must not 500.
+					logger.exception("Agent summary completion failed (user_id=%s)", user_id)
+					sentry_sdk.capture_exception()
+					final_message = (
+						"I reviewed your request and prepared these suggestions for you to review."
+					)
 			break
 
 	if not final_message:

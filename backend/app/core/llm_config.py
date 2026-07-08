@@ -171,7 +171,10 @@ llm_config = LLMConfig()
 _MODEL_TIER_MAP: dict[LLMProvider, dict[ModelTier, str]] = {
     LLMProvider.openrouter: {
         ModelTier.FAST:     "openai/gpt-oss-20b:free",
-        ModelTier.STANDARD: "google/gemma-4-31b-it:free",
+        # STANDARD is the agent (tool-calling) tier. Gemma has no real tool-call
+        # support, so use gpt-oss which does — keeping the whole STANDARD tier
+        # tool-capable across Cerebras / Groq / OpenRouter.
+        ModelTier.STANDARD: "openai/gpt-oss-120b:free",
     },
     LLMProvider.ollama: {
         ModelTier.FAST:     "qwen3:4b",   # already pulled; thinking overhead is negligible for simple tasks
