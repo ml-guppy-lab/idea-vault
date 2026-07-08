@@ -47,6 +47,7 @@ from app.models import user, refresh_token  # noqa: F401
 # PII (send_default_pii=False) so tokens, cookies, and request bodies stay out.
 if settings.SENTRY_DSN:
     import sentry_sdk
+    from sentry_sdk.integrations.openai import OpenAIIntegration
 
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
@@ -56,6 +57,11 @@ if settings.SENTRY_DSN:
         traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
         # Never ship request bodies, cookies, or user PII to Sentry.
         send_default_pii=False,
+        # Cross-provider failover deliberately handles provider errors
+        # (429/404/400) by trying the next endpoint, so Sentry's OpenAI
+        # integration would otherwise report every expected failover attempt as
+        # a separate issue. Disable it — Langfuse owns LLM observability.
+        disabled_integrations=[OpenAIIntegration()],
     )
     _app_log.info("Sentry initialised (environment=%s)", settings.SENTRY_ENVIRONMENT)
 

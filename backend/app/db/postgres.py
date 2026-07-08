@@ -52,7 +52,17 @@ def _build_engine_url(raw_url: str) -> tuple[str, dict]:
 
 
 _db_url, _connect_args = _build_engine_url(settings.DATABASE_URL)
-engine = create_async_engine(_db_url, echo=False, connect_args=_connect_args)
+engine = create_async_engine(
+    _db_url,
+    echo=False,
+    connect_args=_connect_args,
+    # Test each pooled connection before use and recycle idle ones. Hosted
+    # Postgres (Render/Neon) drops idle connections server-side; without this a
+    # revived-from-pool dead connection surfaces as asyncpg "connection is
+    # closed" mid-request (seen on /auth/google/callback).
+    pool_pre_ping=True,
+    pool_recycle=300,
+)
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,

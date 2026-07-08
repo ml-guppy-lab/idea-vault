@@ -1148,8 +1148,8 @@ chain of tier-appropriate models:
 
 | Tier | Cerebras | Groq | OpenRouter | Used for |
 |---|---|---|---|---|
-| **FAST** | `llama3.1-8b` | `llama-3.1-8b-instant` | `gpt-oss-20b:free` | greetings, listing, counts, intent classification, query rewriting, summarising |
-| **STANDARD** | `llama-3.3-70b` | `llama-3.3-70b-versatile` | `gemma-4-31b:free` | semantic-search answers, the agent |
+| **FAST** | `gpt-oss-120b` | `llama-3.1-8b-instant` | `gpt-oss-20b:free` | greetings, listing, counts, intent classification, query rewriting, summarising |
+| **STANDARD** | `gpt-oss-120b` | `openai/gpt-oss-120b` | `gpt-oss-120b:free` | semantic-search answers, the agent (all tool-capable) |
 
 ### Decisions
 - **Build it, don't add LiteLLM.** Because every provider is already OpenAI-compatible, the whole thing
@@ -1163,9 +1163,12 @@ chain of tier-appropriate models:
   backoff. With independent providers that's wrong — if Cerebras just 429'd, another provider almost
   certainly has capacity *now* — so the chain fails over immediately with no per-provider backoff. More
   resilient *and* faster.
-- **Fail over on provider problems only.** 429 / timeout / connection / 5xx / empty `choices` advance to
-  the next provider; a **400 (bad request)** is *our* bug and is allowed to surface rather than be masked
-  by an identical failure elsewhere.
+- **Fail over on any provider-side failure.** The chain retries the next endpoint on any
+  `APIStatusError` (every non-2xx: 400 / 401 / 403 / 404 / 429 / 5xx), plus timeouts, connection errors,
+  and an empty `choices` payload. This is deliberately broad: on free tiers a "bad request"/"model not
+  found"/"tool_use_failed" from one provider is often just *that provider's* quirk, so trying the next one
+  is usually the right move. The only cost is that a genuinely malformed request walks the whole chain
+  before surfacing — acceptable for the resilience it buys.
 - **Streaming fails over at connect time only.** 429s surface when the stream is opened, before any
   token — safe to switch there. A rare mid-stream drop just ends that reply; we never restart half an
   answer.
@@ -1447,4 +1450,234 @@ Frontend:
    provider 400s. Session/user appear inside trace metadata.
 4. No-keys check: locally (no keys) tracing is fully inert, feedback returns `recorded: false`, and the
    classifier smoke test still passes.
+
+---
+
+## Production Fixes — Issues Surfaced After Deploy (Sentry + Langfuse)
+
+Once the app was deployed to Render and wired to Sentry + Langfuse, real traffic exposed a cluster of
+issues that never appeared in local dev. Each one below is a *real* production incident: what the
+observability tools showed, the root cause, and the fix. They fall into three buckets — free-tier models
+that quietly broke, an unhandled failure that reached the user, and observability/infra papercuts.
+
+### At a glance
+
+| # | Symptom in production | Root cause | Fix | Type |
+|---|---|---|---|---|
+| 1 | Cerebras `404 model llama-3.3-70b does not exist` (~70 events) | Cerebras retired Llama from the free/shared endpoint | Move both Cerebras tiers to `gpt-oss-120b` | Config |
+| 2 | Groq `400 tool_use_failed` on the agent | `llama-3.3-70b-versatile` output fails Groq's tool validator | Groq STANDARD → `openai/gpt-oss-120b` | Config |
+| 3 | Agent silently unreliable on OpenRouter | `gemma-4-31b` has no real tool-calling support | OpenRouter STANDARD → `openai/gpt-oss-120b:free` | Config |
+| 4 | Agent write path returned `500 Unknown error` | All providers failed → unhandled exception | Graceful try/except + friendly message | Code |
+| 5 | Sentry flooded with expected failover attempts | Sentry's OpenAI integration reported every retry | `disabled_integrations=[OpenAIIntegration()]` | Code |
+| 6 | asyncpg `connection is closed` on `/auth/google/callback` | Hosted Postgres drops idle pooled connections | `pool_pre_ping=True`, `pool_recycle=300` | Code |
+| 7 | Langfuse `401 Failed to export span batch` — no traces | `LANGFUSE_HOST` region mismatch (US project on EU host) | Point host at the correct region | Config (env) |
+
+---
+
+### Issue 1–3: The whole agent tier had to move to `gpt-oss` (tool-capable everywhere)
+
+#### The problem
+The failover chain was designed so the agent could survive any single provider dying. Production proved
+that only works if **every** hop can actually do tool calling — and three of them couldn't:
+
+- **Cerebras — `404 model llama-3.3-70b does not exist`** (~70 events in Sentry). Cerebras **retired the
+  Llama models from its free/shared endpoint** and moved them to paid Dedicated Endpoints. Our
+  STANDARD *and* FAST tiers both pointed at now-nonexistent Llama models, so Cerebras — the *first* hop —
+  404'd on every request and the chain immediately fell through to Groq.
+- **Groq — `400 tool_use_failed`** on the agent. `llama-3.3-70b-versatile` nominally "supports tools",
+  but its emitted tool-call payload intermittently fails Groq's **strict server-side tool validator**,
+  which rejects the whole request with a 400.
+- **OpenRouter — silently wrong.** The backstop hop ran `gemma-4-31b`, and **Gemma has no real
+  tool-calling support at all**. This was a latent bug: if the request ever reached OpenRouter for an
+  agent turn, tool calling would simply not happen.
+
+Net effect: an agent request could burn through all three providers and still fail — which is exactly
+what produced the `500 Unknown error` (Issue 4).
+
+#### The fix
+Standardise the **entire STANDARD/agent tier on `gpt-oss-120b`** — a genuinely tool-reliable production
+model — across all three providers, so every failover hop can complete an agent turn:
+
+| Tier | Cerebras | Groq | OpenRouter | Tools needed? |
+|---|---|---|---|---|
+| **FAST** | `gpt-oss-120b` | `llama-3.1-8b-instant` | `gpt-oss-20b:free` | No |
+| **STANDARD (agent)** | `gpt-oss-120b` | `openai/gpt-oss-120b` | `openai/gpt-oss-120b:free` | **Yes** |
+
+The FAST tier (intent classification, query rewriting, summarising — no tools) keeps the small, quick
+models. Only the STANDARD/agent tier was unified.
+
+#### Decisions
+- **One model family for the agent, not per-provider guesswork.** Picking a *different* tool-capable
+  model per provider means three chances to pick wrong. `gpt-oss-120b` is offered as a first-class
+  production model by all three, so the agent behaves identically no matter which hop serves it.
+- **Verified against live provider docs, not assumed.** Cerebras docs confirmed the free public catalog
+  is now `gpt-oss-120b` (production) with `gemma-4-31b`/`zai-glm-4.7` in preview; Groq docs confirmed
+  `openai/gpt-oss-120b` is production and tool-reliable. The model names were changed on evidence, not a
+  hunch.
+- **Keep FAST small.** Classification and rewriting never call tools and run on the hot path, so paying
+  120B latency there would be wasteful — FAST stays on the small models.
+- **Env-overridable so the next retirement is a config change, not a redeploy.** Groq/Cerebras models
+  are `LLM_*_MODEL_*` settings; when a free tier renames a model again, it's one env var. (OpenRouter's
+  lives in the `_MODEL_TIER_MAP`, so that one still needs a deploy — noted below.)
+
+#### Files changed
+- `backend/app/core/config.py` — `LLM_CEREBRAS_MODEL_STANDARD` and `LLM_CEREBRAS_MODEL_FAST` → `gpt-oss-120b`;
+  `LLM_GROQ_MODEL_STANDARD` → `openai/gpt-oss-120b` (`LLM_GROQ_MODEL_FAST` stays `llama-3.1-8b-instant`).
+- `backend/app/core/llm_config.py` — OpenRouter STANDARD in `_MODEL_TIER_MAP` → `openai/gpt-oss-120b:free`
+  (FAST stays `openai/gpt-oss-20b:free`).
+- `Readme/steps_v5.md` — the failover tier table updated to reflect the uniform `gpt-oss` STANDARD tier.
+
+#### How to verify it works
+1. Resolve the tiers: STANDARD → `gpt-oss-120b` / `openai/gpt-oss-120b` / `openai/gpt-oss-120b:free`; FAST
+   unchanged. (Confirmed via a one-off print of the resolved models.)
+2. Ask the agent to create/update an idea → a proposal card appears, no `400 tool_use_failed`, no `404`.
+3. Kill Cerebras/Groq keys one at a time → the agent still completes on the next hop because every hop is
+   now tool-capable.
+
+---
+
+### Issue 4: Agent write path returned `500 Unknown error`
+
+#### The problem
+When *all three* providers failed a single agent turn (rate limits stacking, or the tool errors above),
+the exception propagated out of `run_agent` unhandled. The user's create/update request died with a
+raw `500 Unknown error` — the worst possible failure mode on a write, because it's ambiguous whether the
+action happened.
+
+#### The fix
+Wrap the agent's completion call (and the closing-summary call) in `try/except`. On total failure the
+agent logs it, records it **once** to Sentry, and returns a calm, honest message —
+*"I'm having trouble reaching the AI service right now. Please try again in a moment."* — then breaks the
+loop cleanly instead of throwing.
+
+#### Decisions
+- **Degrade, don't 500.** A user-facing outage message is far better than a stack trace; the request
+  ends predictably and nothing half-writes.
+- **Capture once, not per-attempt.** The `except` records a single Sentry event for the *whole* failed
+  turn, so the outage stays visible without spamming (complements Issue 5).
+- **Same treatment for the summary call.** The optional closing-summary completion is wrapped too, so a
+  late failure can't undo a proposal that already succeeded.
+
+#### Files changed
+- `backend/app/services/agentic_ai/agent_service.py` — main completion wrapped in `try/except` →
+  `sentry_sdk.capture_exception()` + friendly `final_message` + `break`; the summary completion wrapped
+  the same way. (`import sentry_sdk` added.)
+
+#### How to verify it works
+1. Force all providers to fail (bad keys) and run an agent request → the chat shows the friendly message,
+   the API returns **200**, and exactly **one** Sentry event is recorded — no `500`.
+2. A normal agent request still produces a proposal card unchanged.
+
+---
+
+### Issue 5: Sentry flooded with *expected* failover attempts
+
+#### The problem
+Sentry's built-in OpenAI integration auto-captures every OpenAI-client call that raises. But the
+failover chain *deliberately* provokes failures — a 429/404/400 on Cerebras is the signal to try Groq.
+So every routine, healthy failover hop was landing in Sentry as its own issue, drowning the real bugs in
+expected noise.
+
+#### The fix
+Disable just that integration at init: `disabled_integrations=[OpenAIIntegration()]`. FastAPI/Starlette
+request tracking stays on; the LLM-call auto-capture that fights our failover design is turned off.
+Langfuse already owns LLM observability, and genuine total-failure is still captured explicitly by the
+Issue 4 handler.
+
+#### Decisions
+- **Division of labour.** Sentry watches *app* errors; Langfuse watches *LLM* calls. Letting Sentry
+  also auto-watch LLM calls double-counts and conflicts with intentional failover.
+- **Surgical, not blanket.** Only the OpenAI integration is disabled — everything else Sentry does is
+  untouched.
+- **We still see real LLM outages.** The explicit `capture_exception()` in the agent (Issue 4) and in
+  the classifier/rewriter/summariser degradation paths keeps genuine "all providers down" visible.
+
+#### Files changed
+- `backend/app/main.py` — `disabled_integrations=[OpenAIIntegration()]` in `sentry_sdk.init`, gated behind
+  `SENTRY_DSN`, with `send_default_pii=False`.
+
+#### How to verify it works
+1. Trigger a normal failover (429 on the first hop) → the request succeeds on the next provider and
+   **no** Sentry issue is created for the expected retry.
+2. Force a total outage → one Sentry event from the explicit handler still appears.
+
+---
+
+### Issue 6: asyncpg `connection is closed` on `/auth/google/callback`
+
+#### The problem
+Sentry showed intermittent `InterfaceError: connection is closed` (asyncpg), most visibly on
+`/auth/google/callback`. Hosted Postgres (Render/Neon) closes idle connections **server-side**, but
+SQLAlchemy's pool still handed out those now-dead connections. The first query on a revived-but-dead
+connection blew up mid-request.
+
+#### The fix
+Enable connection health checks on the async engine: `pool_pre_ping=True` (test each pooled connection
+with a lightweight ping before use, transparently replacing dead ones) and `pool_recycle=300` (proactively
+retire connections older than 5 minutes, staying under the host's idle timeout).
+
+#### Decisions
+- **Pre-ping over hoping.** The ping cost is negligible next to an OAuth round-trip and eliminates the
+  race entirely — the correct, standard fix for pooled connections behind a hosted DB.
+- **Recycle as belt-and-braces.** 300s keeps connections comfortably younger than typical hosted idle
+  timeouts so most are recycled before the server ever drops them.
+
+#### Files changed
+- `backend/app/db/postgres.py` — `create_async_engine(..., pool_pre_ping=True, pool_recycle=300)`.
+
+#### How to verify it works
+1. Leave the app idle past the DB's idle timeout, then hit `/auth/google/callback` (or any DB route) →
+   it succeeds; the dead connection is silently replaced instead of raising `connection is closed`.
+2. Normal traffic behaves identically (pre-ping is invisible on healthy connections).
+
+---
+
+### Issue 7: Langfuse `401 Failed to export span batch` — no traces appearing
+
+#### The problem
+Langfuse was configured and the app booted clean, but **no traces showed up** and Sentry/logs carried
+`Failed to export span batch code: 401 Unauthorized`. Langfuse's OTel exporter authenticates against a
+**region-specific host**: a project created in the **US** region rejects exports sent to the default
+**EU** host (`https://cloud.langfuse.com`) with a 401, even when the keys are correct.
+
+#### The fix
+This is a **configuration** fix, not a code change — the code already reads `LANGFUSE_HOST` from env and
+defaults sensibly. Set `LANGFUSE_HOST` to the region that matches the project (US →
+`https://us.cloud.langfuse.com`, EU → `https://cloud.langfuse.com`) and confirm the public/secret keys
+belong to that same project, then redeploy/restart so the exporter re-initialises.
+
+#### Decisions
+- **Config, not code.** The host is already an env var; hardcoding a region would just move the problem.
+  The default stays EU (Langfuse's default) and US deployments override it.
+- **Fail inert, never crash.** Tracing stays gated behind *both* keys, so a misconfigured host degrades
+  to "no traces" rather than taking a request down — the 401 is an export-side warning, not a request
+  error.
+
+#### Files changed
+- None (code already env-driven). Operational fix: set `LANGFUSE_HOST` (and verify keys) in the Render
+  environment.
+
+#### How to verify it works
+1. With the correct region host + keys, send a chat → the reply's LLM call appears as a Langfuse trace
+   and the `401 Failed to export span batch` warnings stop.
+2. Thumbs 👍/👎 then reload → the `user-feedback` score persists on that trace.
+
+---
+
+### Deployment note (this round)
+
+These fixes ship together and mostly land via **redeploy** so the updated `config.py` defaults and the
+`_MODEL_TIER_MAP` change take effect. To patch the model issues *before* a full redeploy, the
+env-overridable ones can be set directly in Render:
+
+```
+LLM_GROQ_MODEL_STANDARD=openai/gpt-oss-120b
+LLM_CEREBRAS_MODEL_STANDARD=gpt-oss-120b
+LLM_CEREBRAS_MODEL_FAST=gpt-oss-120b
+LANGFUSE_HOST=https://us.cloud.langfuse.com   # only if the project is US-region
+```
+
+OpenRouter's STANDARD model lives in the code (`_MODEL_TIER_MAP`), not env, so that one requires the
+redeploy. The graceful agent path (Issue 4), Sentry OpenAI-integration disable (Issue 5), and Postgres
+pre-ping (Issue 6) are all code changes and take effect on deploy.
 
