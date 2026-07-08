@@ -1362,3 +1362,89 @@ Frontend:
 5. No-DSN check: locally (no DSN) everything runs unchanged and the classifier smoke test still passes —
    confirming the integration is fully inert until configured.
 
+---
+
+## LLM Observability with Langfuse (traces + user feedback)
+
+### The problem
+Sentry tells us when the app *crashes* — but nothing about whether the AI's answers are any *good*,
+what they *cost*, how *slow* they are, or which provider actually served them. For an LLM product that
+quality/cost axis is invisible: you can't improve or debug answers you can't see, and there's no channel
+for a user to signal "this reply was wrong/right."
+
+### Why a *separate* tool — Langfuse **and** Sentry, not one
+They measure two different axes and neither replaces the other:
+- **Sentry = application errors** (crashes, 5xx) across the *whole* app — auth, collections, Postgres,
+  image upload, AI routes. It cannot show a prompt/response, token cost, per-provider analytics, or evals.
+- **Langfuse = LLM quality & cost** — prompt, response, model, provider, tokens, latency — plus user
+  feedback on generated answers. It cannot capture the non-AI 500s that actually happen elsewhere.
+
+Forcing both jobs into one tool means a weak version of each (Sentry's LLM features are shallow; Langfuse
+is not a general exception tracker). Running both, each for its own axis, is the standard, defensible split
+used in real AI companies — and it signals an understanding of *application* vs *LLM* observability.
+
+### Why Langfuse over the alternatives
+- **vs Helicone (proxy-based):** Helicone routes every call through its proxy `base_url` — which fights our
+  multi-provider failover (three different provider base URLs). Langfuse instruments at the *code* layer
+  (an OpenAI drop-in), a clean fit for our already-centralised `llm_client.py`.
+- **vs LangSmith:** tightly coupled to LangChain, which this project deliberately doesn't use.
+- **vs Arize Phoenix / self-hosted stacks:** more ops than a solo project warrants.
+- **Langfuse:** open-source, generous free cloud tier, one-line drop-in, and built-in scores/feedback +
+  evals. Best fit for the stack and the budget.
+
+### The fix
+- **Tracing at the single chokepoint.** Because every LLM call was already centralised in `llm_client.py`
+  (from the failover work), tracing is a *one-file* swap: when the keys are set, the OpenAI client is
+  replaced with Langfuse's drop-in, so **every** call across the app (RAG answer, agent, classifier,
+  rewriter, summariser) is traced automatically with input, output, model, provider, tier, tokens,
+  latency, and cost.
+- **One trace per turn + feedback.** Each chat turn gets a Langfuse trace id (`new_trace_id()`), surfaced
+  to the client — an SSE `trace` event for the RAG stream, a `trace_id` field in the agent JSON. Thumbs
+  up/down on a reply POSTs to `POST /api/ai/feedback`, which records a `user-feedback` score against that
+  trace id.
+
+### Decisions
+- **Instrument once, cover everything.** Centralising all LLM calls earlier is what makes this cheap — one
+  swap traces every call site instead of scattering instrumentation.
+- **Pass only kwargs the drop-in strips (`name`, `metadata`, `trace_id`).** Verified in the SDK source
+  that `session_id`/`user_id`/`trace_context` are **not** stripped — passing them would leak to the
+  provider API and **400 every call**. So session/user ride *inside* `metadata`. (This is the kind of
+  mistake that takes down all AI at once, so it was verified against source, not assumed.)
+- **Both keys stay server-side.** Langfuse authenticates with the public+secret pair; neither is exposed to
+  the browser — feedback is written by the *backend* on the user's behalf, so no Langfuse key ever ships to
+  the client.
+- **Feedback is best-effort, fire-and-forget.** A disabled/failed write returns `{"recorded": false}`; the
+  thumbs never block or error the chat. One vote per reply, persisted with the message so it survives reload.
+- **Inert by default.** No keys → the drop-in is never loaded and `new_trace_id()`/`record_feedback()`
+  no-op; local dev, tests, and the classifier smoke test behave exactly as before.
+- **Flush on shutdown** so buffered traces aren't lost when the process stops.
+
+### Files changed
+Backend:
+- `backend/app/core/config.py` — `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` (inert unless both keys set).
+- `backend/app/core/langfuse_client.py` *(new)* — enable flag, client singleton, `new_trace_id()`, `record_feedback()`.
+- `backend/app/core/llm_client.py` — swaps in the Langfuse OpenAI drop-in when enabled; threads `trace_id`/`session_id`/`user_id` and emits only the safe stripped kwargs.
+- `backend/app/services/rag_service.py`, `backend/app/ai/chat_pipeline.py` — RAG path generates the turn trace id, emits it as an SSE `trace` event, and threads it into the generation.
+- `backend/app/services/agentic_ai/agent_service.py` — the agent threads the trace id into its completions.
+- `backend/app/api/ai.py` — returns `trace_id` in the agent JSON and adds `POST /api/ai/feedback`.
+- `backend/app/schemas/chat.py` — `FeedbackRequest` (`trace_id`, `value`, optional `comment`).
+- `backend/app/main.py` — flushes Langfuse on shutdown. `backend/requirements.txt` — adds `langfuse`.
+
+Frontend:
+- `frontend/app/api/ai/feedback/route.ts` *(new)* — BFF proxy that forwards the rating with the access token.
+- `frontend/components/chat/MessageBubble.tsx` — `traceId`/`feedback` on the message + a thumbs-up/down control on completed replies.
+- `frontend/components/chat/UnifiedChatWindow.tsx` — captures the trace id from the SSE `trace` event and the agent JSON, and POSTs the rating.
+
+### Configuration
+- **Backend env:** `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` (defaults to `https://cloud.langfuse.com`). Both keys live server-side; nothing Langfuse-related is exposed to the browser.
+
+### How to verify it works
+1. Set the keys and chat → each reply's LLM call appears as a Langfuse trace with model, provider, tier,
+   tokens, latency, and cost.
+2. Click 👍/👎 on a reply → a `user-feedback` score appears on that reply's trace; the vote is one-shot and
+   persists across reload.
+3. Safety: the drop-in was verified to emit only `{name, metadata, trace_id}` — no leaked kwargs, so no
+   provider 400s. Session/user appear inside trace metadata.
+4. No-keys check: locally (no keys) tracing is fully inert, feedback returns `recorded: false`, and the
+   classifier smoke test still passes.
+

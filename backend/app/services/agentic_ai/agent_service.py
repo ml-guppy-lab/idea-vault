@@ -135,6 +135,9 @@ async def _create_completion_with_fallback(
 	tools: list[dict[str, Any]] | None = None,
 	tool_choice: str | None = None,
 	max_tokens: int,
+	trace_id: str | None = None,
+	session_id: str | None = None,
+	user_id: str | None = None,
 ) -> Any:
 	"""Agent completion with cross-provider failover.
 
@@ -148,11 +151,24 @@ async def _create_completion_with_fallback(
 		request_kwargs["tools"] = tools
 	if tool_choice is not None:
 		request_kwargs["tool_choice"] = tool_choice
-	return await create_chat_completion(messages, tier=ModelTier.STANDARD, **request_kwargs)
+	return await create_chat_completion(
+		messages,
+		tier=ModelTier.STANDARD,
+		trace_id=trace_id,
+		session_id=session_id,
+		user_id=user_id,
+		generation_name="agent-turn",
+		**request_kwargs,
+	)
 
 
 async def run_agent(
-	user_message: str, user_id: str, history: list[dict] | None = None
+	user_message: str,
+	user_id: str,
+	history: list[dict] | None = None,
+	*,
+	trace_id: str | None = None,
+	session_id: str | None = None,
 ) -> AgentResponse:
 	"""
 	Run one human-in-the-loop agent turn.
@@ -188,6 +204,9 @@ async def run_agent(
 			tools=AGENT_TOOLS,
 			tool_choice="auto",
 			max_tokens=1200,
+			trace_id=trace_id,
+			session_id=session_id,
+			user_id=user_id,
 		)
 		choices = getattr(response, "choices", None)
 		if not choices:
@@ -305,6 +324,9 @@ async def run_agent(
 						}
 					],
 					max_tokens=220,
+					trace_id=trace_id,
+					session_id=session_id,
+					user_id=user_id,
 				)
 				summary_choices = getattr(summary, "choices", None)
 				if summary_choices:

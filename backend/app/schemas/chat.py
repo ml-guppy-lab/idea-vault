@@ -34,6 +34,23 @@ class ChatRequest(BaseModel):
     )
 
 
+class FeedbackRequest(BaseModel):
+    """Thumbs-up/down feedback on a generated AI reply, scored in Langfuse."""
+
+    trace_id: str = Field(
+        ...,
+        min_length=8,
+        max_length=64,
+        description="Langfuse trace id returned with the AI reply.",
+    )
+    value: bool = Field(..., description="True = thumbs up, False = thumbs down.")
+    comment: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="Optional free-text note accompanying the rating.",
+    )
+
+
 class ChatMessage(BaseModel):
     """
     A single turn in the conversation history.

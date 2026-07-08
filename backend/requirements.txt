@@ -38,3 +38,4 @@ certifi>=2024.6.0             # SSL certificates (important for secure API calls
 
 # Observability
 sentry-sdk[fastapi]>=2.0.0    # error tracking + performance tracing (inert unless SENTRY_DSN is set)
+langfuse>=3.0.0              # LLM observability: traces + user feedback (inert unless LANGFUSE keys set)

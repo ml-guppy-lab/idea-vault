@@ -129,6 +129,13 @@ export default function UnifiedChatWindow({
 
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // Mirror of messages for stable reads inside callbacks (feedback), avoiding a
+  // stale closure without re-creating the callback on every message change.
+  const messagesRef = useRef(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
   // Persist completed exchanges (messages + resolved map + session id) once idle.
   useEffect(() => {
     if (!busy) saveState(userId, { messages, resolved, sessionId: sessionIdRef.current });
@@ -162,13 +169,24 @@ export default function UnifiedChatWindow({
 
         try {
           const event = JSON.parse(trimmed.slice(6)) as {
-            type: "mode" | "session" | "status" | "thinking" | "text" | "done" | "error";
+            type: "mode" | "session" | "trace" | "status" | "thinking" | "text" | "done" | "error";
             content: string;
           };
 
           // "session" carries the backend conversation id for follow-ups.
           if (event.type === "session") {
             if (event.content) sessionIdRef.current = event.content;
+            continue;
+          }
+
+          // "trace" carries the Langfuse trace id so this reply can be rated.
+          if (event.type === "trace") {
+            if (event.content) {
+              const tid = event.content;
+              setMessages((prev) =>
+                prev.map((m) => (m.id === assistantId ? { ...m, traceId: tid } : m)),
+              );
+            }
             continue;
           }
 
@@ -279,6 +297,7 @@ export default function UnifiedChatWindow({
             message?: string;
             proposals?: Proposal[];
             session_id?: string;
+            trace_id?: string;
           };
           if (data.session_id) sessionIdRef.current = data.session_id;
           setStatusMessage(null);
@@ -292,6 +311,7 @@ export default function UnifiedChatWindow({
                         ? data.message
                         : "I reviewed your request.",
                     proposals: Array.isArray(data.proposals) ? data.proposals : [],
+                    traceId: data.trace_id,
                     isStreaming: false,
                   }
                 : m,
@@ -380,6 +400,22 @@ export default function UnifiedChatWindow({
     },
     [],
   );
+
+  // ── Rate a reply (thumbs up/down) — recorded in Langfuse via the backend ────
+  const handleFeedback = useCallback((messageId: string, value: "up" | "down") => {
+    const target = messagesRef.current.find((m) => m.id === messageId);
+    // One vote per reply; ignore if already rated or not traceable.
+    if (!target || target.feedback || !target.traceId) return;
+    setMessages((prev) =>
+      prev.map((m) => (m.id === messageId ? { ...m, feedback: value } : m)),
+    );
+    // Fire-and-forget — feedback must never interrupt the chat.
+    fetch("/api/ai/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trace_id: target.traceId, value: value === "up" }),
+    }).catch(() => {});
+  }, []);
 
   // ── Clear chat ──────────────────────────────────────────────────────────────
   function clearChat() {
@@ -507,7 +543,11 @@ export default function UnifiedChatWindow({
       >
         {messages.map((msg) => (
           <div key={msg.id}>
-            <MessageBubble message={msg} isDark={isDark} />
+            <MessageBubble
+              message={msg}
+              isDark={isDark}
+              onFeedback={(value) => handleFeedback(msg.id, value)}
+            />
 
             {/* Agent proposals render directly below the assistant bubble. */}
             {msg.role === "assistant" && msg.proposals && msg.proposals.length > 0 && (
