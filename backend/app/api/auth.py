@@ -604,35 +604,46 @@ async def verify_email(token: str, db: AsyncSession = Depends(get_db)) -> dict:
     The token is hashed before the DB lookup so the raw value is never stored.
     Returns 200 even when already verified so the UI can show a friendly message.
     """
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    try:
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
 
-    result = await db.execute(
-        select(User).where(User.verification_token_hash == token_hash)
-    )
-    user = result.scalar_one_or_none()
+        result = await db.execute(
+            select(User).where(User.verification_token_hash == token_hash)
+        )
+        user = result.scalar_one_or_none()
 
-    _invalid = HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Invalid or expired verification link. Please request a new one.",
-    )
+        _invalid = HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification link. Please request a new one.",
+        )
 
-    if not user:
-        raise _invalid
+        if not user:
+            raise _invalid
 
-    # Idempotent — already verified is not an error
-    if user.email_verified:
-        return {"message": "Email already verified. You can now log in."}
+        # Idempotent — already verified is not an error
+        if user.email_verified:
+            return {"message": "Email already verified. You can now log in."}
 
-    if datetime.now(timezone.utc) > user.verification_token_expires:
-        raise _invalid
+        if datetime.now(timezone.utc) > user.verification_token_expires:
+            raise _invalid
 
-    # Mark verified and clear the one-time token so it cannot be replayed
-    user.email_verified = True
-    user.verification_token_hash = None
-    user.verification_token_expires = None
-    await db.commit()
+        # Mark verified and clear the one-time token so it cannot be replayed
+        user.email_verified = True
+        user.verification_token_hash = None
+        user.verification_token_expires = None
+        await db.commit()
 
-    return {"message": "Email verified successfully. You can now log in."}
+        return {"message": "Email verified successfully. You can now log in."}
+    except HTTPException:
+        raise  # expected control-flow — not an error worth capturing
+    except Exception:
+        import sentry_sdk
+        logger.exception("[auth] unexpected error during email verification")
+        sentry_sdk.capture_exception()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Something went wrong. Please try again.",
+        )
 
 
 # ---------------------------------------------------------------------------

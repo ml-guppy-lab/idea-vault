@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const BACKEND = process.env.BACKEND_URL ?? "http://backend:8000";
+// Use the same env-var resolution as every other BFF route: prefer the
+// internal service URL (Docker / Render private network), fall back to the
+// public API URL. BACKEND_URL was the old name used here and is not set on
+// Render, which caused the BFF to call http://backend:8000 (Docker-only) and
+// silently fail — every verification link returned "failed to verify".
+const BACKEND =
+  process.env.INTERNAL_API_URL ??
+  process.env.NEXT_PUBLIC_API_URL ??
+  "http://localhost:8000/api";
 
 /**
  * GET /api/auth/verify-email?token=...
