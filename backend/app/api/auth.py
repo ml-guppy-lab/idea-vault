@@ -189,36 +189,22 @@ async def register(
             )
 
         # Unverified ghost account — the user registered but email delivery
-        # failed (or the link was never clicked). Allow them to re-register.
-        #
-        # ── EMAIL VERIFICATION TEMPORARILY DISABLED ──────────────────────────
-        # No paid sending domain yet, so verification links resolve to a
-        # personal inbox — not wanted in production. Until a domain is set up,
-        # re-registration just resets the password and marks this (legacy)
-        # account verified so it can log in. Restore the commented lines below
-        # to bring back the email flow.
-        # raw_token, token_hash = _generate_token()
+        # failed (or the link was never clicked). Allow them to re-register:
+        # reset their password, issue a fresh verification token, and resend.
+        raw_token, token_hash = _generate_token()
         existing.hashed_password = hash_password(payload.password)
         existing.auth_provider = AuthProvider.local
         _link_provider(existing, AuthProvider.local)
-        existing.email_verified = True  # TEMP: verification disabled
-        # existing.verification_token_hash = token_hash
-        # existing.verification_token_expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        existing.email_verified = False
+        existing.verification_token_hash = token_hash
+        existing.verification_token_expires = datetime.now(timezone.utc) + timedelta(hours=24)
         await db.commit()
         await db.refresh(existing)
-        # background_tasks.add_task(send_verification_email, existing.email, raw_token)
+        background_tasks.add_task(send_verification_email, existing.email, raw_token)
         return existing
 
-    # Brand-new email.
-    #
-    # ── EMAIL VERIFICATION TEMPORARILY DISABLED ──────────────────────────────
-    # No paid sending domain yet, so verification links resolve to a personal
-    # inbox — not something we want in production. Until a domain is configured,
-    # new accounts are created PRE-VERIFIED and no email is sent, so signup
-    # simply registers the user. To re-enable: restore the commented lines
-    # below, set email_verified back to False, and re-enable the login gate in
-    # login() plus the check-email screen in the frontend (SignupForm.tsx).
-    # raw_token, token_hash = _generate_token()
+    # Brand-new email — create unverified, send verification link.
+    raw_token, token_hash = _generate_token()
 
     user = User(
         email=payload.email,
@@ -227,16 +213,16 @@ async def register(
         auth_providers=[AuthProvider.local.value],
         is_active=True,
         created_at=datetime.now(timezone.utc),
-        email_verified=True,  # TEMP: was False — verification disabled
-        # verification_token_hash=token_hash,
-        # verification_token_expires=datetime.now(timezone.utc) + timedelta(hours=24),
+        email_verified=False,
+        verification_token_hash=token_hash,
+        verification_token_expires=datetime.now(timezone.utc) + timedelta(hours=24),
     )
 
     db.add(user)
     await db.commit()
     await db.refresh(user)
 
-    # background_tasks.add_task(send_verification_email, user.email, raw_token)
+    background_tasks.add_task(send_verification_email, user.email, raw_token)
     return user
 
 
@@ -274,18 +260,13 @@ async def login(
             detail="Account is disabled",
         )
 
-    # ── EMAIL VERIFICATION GATE TEMPORARILY DISABLED ─────────────────────────
-    # Verification is off until a real sending domain is configured (see
-    # register()). New accounts are created pre-verified, so this gate is moot;
-    # it's commented out so any legacy unverified account can also log in.
-    # Restore this block to re-enforce email verification on login.
     # Block login until the user has verified their email address.
-    # Google OAuth users are pre-verified, so this only applies to local accounts.
-    # if not user.email_verified:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail="Please verify your email address before logging in. Check your inbox for the verification link.",
-    #     )
+    # Google OAuth users are always pre-verified, so this only affects local accounts.
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please verify your email address before logging in. Check your inbox for the verification link.",
+        )
 
     # Record the provider used for this session and preserve linked providers.
     user.auth_provider = AuthProvider.local

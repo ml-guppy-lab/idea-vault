@@ -1735,3 +1735,52 @@ is absent and behaviour is unchanged.
 4. Prompt check: `_build_system_prompt({"intent": "SEMANTIC_SEARCH", "ideas": []})` contains
    `NO MATCHES FOUND`; the same call with a non-empty `ideas` list does not.
 
+---
+
+## Keep-Alive Cron Job (preventing Render free-tier cold starts)
+
+### The problem
+Render's free tier spins down any web service after **15 minutes of inactivity**. The next request
+triggers a cold start that takes ~50 seconds to wake up. For a portfolio project where a recruiter might
+visit at any time, a 50-second blank screen on first load is an unacceptable first impression — and a
+real risk of losing the opportunity.
+
+### The fix
+A free external cron job ([cron-job.org](https://cron-job.org)) hits the existing `/health` endpoint
+on the **backend** service every **10 minutes**, keeping it permanently warm. The endpoint is
+intentionally trivial — it returns `{"status": "ok", "version": "..."}` with no DB queries, no auth,
+and no side effects — so the ping costs nothing and adds zero risk.
+
+```
+https://idea-vault-backend-<id>.onrender.com/health   →   {"status": "ok"}
+```
+
+### Why this approach
+
+- **The endpoint already existed.** `GET /health` was wired in `main.py` from the start as a standard
+  liveness check (used by Render's own health-check config). No new code needed.
+- **External ping, not a self-ping.** A background task inside the app that calls itself would still
+  count as inactivity from Render's perspective (only *inbound* requests reset the idle timer). An
+  external service makes a real HTTP request that Render sees as traffic.
+- **10-minute interval beats the 15-minute threshold.** Even with some timing variance, a 10-minute
+  ping ensures the service never approaches the idle limit.
+- **cron-job.org is free and takes 2 minutes to set up.** No infrastructure to manage; it sends email
+  alerts after 3 consecutive failures so you know if the backend goes down.
+- **Zero cost.** The health check consumes no LLM quota, no DB connections, and no Render compute
+  beyond keeping the process alive — which was the entire goal.
+
+### What this doesn't fix
+This keeps the **backend** warm. The frontend (Next.js on Render) is a separate service and may have
+its own sleep behaviour depending on how it's deployed — a second cron job pointing at the frontend URL
+can be added the same way if needed.
+
+### Configuration
+- **cron-job.org:** create a job, set URL to the backend `/health` endpoint, interval = every 10 minutes.
+- **No code changes** — the `/health` endpoint in `backend/app/main.py` was already there.
+
+### How to verify it works
+1. Check cron-job.org history → each execution should show `200 OK`.
+2. Visit the deployed site after a long idle period → it loads immediately instead of showing a 50-second
+   spinner (the backend was already warm from the last ping).
+3. Render's service metrics should show steady inbound traffic every 10 minutes with no cold-start restarts.
+

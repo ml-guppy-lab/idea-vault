@@ -102,12 +102,10 @@ function AuthInput({
     </div>
   );
 }
-// Email verification is temporarily disabled until a real sending domain is
-// configured (verification links currently resolve to a personal inbox). While
-// off, signup creates a pre-verified account and redirects straight to login.
-// Flip this to true — and restore the commented backend blocks in auth.py — to
-// bring back the full "check your email" verification flow.
-const EMAIL_VERIFICATION_ENABLED: boolean = false;
+// Email verification is active. mlguppy.site is a verified Resend sending domain,
+// so verification links are delivered to the actual user's inbox.
+// To disable: set to false and comment out the token/email blocks in auth.py.
+const EMAIL_VERIFICATION_ENABLED: boolean = true;
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function SignupForm() {
