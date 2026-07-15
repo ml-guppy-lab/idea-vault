@@ -7,7 +7,7 @@
 A full-stack, production-style **AI idea-management platform** — secure auth, semantic search,
 real-time AI chat, and a human-in-the-loop **AI Agent** that proposes changes before applying them.
 
-[![Live Demo](https://img.shields.io/badge/Live_Demo-idea--vault-2563eb?style=for-the-badge&logo=render&logoColor=white)](https://idea-vault-frontend.onrender.com)
+[![Live Demo](https://img.shields.io/badge/Live_Demo-idea--vault-2563eb?style=for-the-badge&logo=render&logoColor=white)](www.idea-vault.mlguppy.site)
 
 ![Next.js](https://img.shields.io/badge/Next.js_16-000000?style=flat&logo=next.js&logoColor=white)
 ![React](https://img.shields.io/badge/React_19-20232A?style=flat&logo=react&logoColor=61DAFB)
