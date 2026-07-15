@@ -19,6 +19,7 @@ real-time AI chat, and a human-in-the-loop **AI Agent** that proposes changes be
 ![Redis](https://img.shields.io/badge/Redis-DC382D?style=flat&logo=redis&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)
 ![Sentry](https://img.shields.io/badge/Sentry-362D59?style=flat&logo=sentry&logoColor=white)
+![Langfuse](https://img.shields.io/badge/langfuse-362D59?style=flat&logo=langfuse&logoColor=white)
 
 </div>
 
